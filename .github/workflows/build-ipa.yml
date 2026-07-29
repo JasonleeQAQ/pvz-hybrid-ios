@@ -317,7 +317,11 @@ jobs:
           
       - name: Fix missing framework links (Metal/QuartzCore)
         run: |
-          echo "Frameworks will be linked via xcodebuild OTHER_LDFLAGS"
+          cd PlantsVsZombiesHybrid.xcodeproj
+          python3 ../.github/workflows/fix_frameworks.py
+          echo "=== Verify frameworks in pbxproj ==="
+          grep -c "Metal.framework" project.pbxproj
+          grep -c "QuartzCore.framework" project.pbxproj
 
       - name: 保存阶段2产物（失败也保存）
         if: always()
