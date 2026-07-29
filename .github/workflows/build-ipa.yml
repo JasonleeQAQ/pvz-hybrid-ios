@@ -244,19 +244,6 @@ jobs:
           echo "=== Build output ==="
           ls -la bin/Release/*/ 2>/dev/null || echo "No bin/Release output"
           cd ..
-      - name: Build C# with dotnet
-        id: dotnet-build
-        run: |
-          set -euo pipefail
-          cd recovered
-          CSPROJ=$(ls *.csproj | head -1)
-          echo "Building $CSPROJ with dotnet..."
-          dotnet restore "$CSPROJ" 2>&1
-          dotnet build "$CSPROJ" -c Release 2>&1
-          echo "=== Build output ==="
-          ls -la bin/Release/*/ 2>/dev/null || echo "No bin/Release output"
-          cd ..
-
       - name: Export Xcode project
         run: |
           set -euo pipefail
