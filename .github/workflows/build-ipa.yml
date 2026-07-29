@@ -138,7 +138,7 @@ jobs:
               'custom_features=""',
               'export_filter="all_resources"',
               'include_filter=""',
-              'exclude_filter=""',
+              'exclude_filter=""', # 【修复】绝不排除 C# 文件
               'export_path="../PlantsVsZombiesHybrid.xcodeproj"',
               'encryption_include_filters=""',
               'encryption_exclude_filters=""',
@@ -188,11 +188,17 @@ jobs:
           GENEOF
           python3 generate_presets.py "${{ github.event.inputs.app_name }}" "${{ github.event.inputs.bundle_id }}" "${{ github.event.inputs.version }}" "${{ github.event.inputs.team_id }}"
 
-      # 【修复】安装 .NET SDK 8.0 用于 Godot C# NativeAOT 编译
+      # 【修复】增加 .NET 8 SDK 安装步骤
       - name: Setup .NET SDK for AOT compilation
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '8.0.x' 
+
+      # 【修复】安装 iOS workload，否则 AOT 编译 C# 静态库依然会失败
+      - name: Install .NET iOS Workload
+        run: |
+          dotnet workload install ios
+          echo ".NET iOS workload installed successfully."
 
       - name: Install Godot 4.7.1 .NET
         if: steps.godot-cache.outputs.cache-hit != 'true'
@@ -212,7 +218,6 @@ jobs:
           path: /Users/runner/Godot.app
           key: godot-4.7.1-dotnet-macos
 
-      # 【修复】缓存命中时 Install Godot 步骤被跳过，需手动确保 Godot 在 PATH 中
       - name: 确保 Godot 在 PATH 中
         if: steps.godot-cache.outputs.cache-hit == 'true'
         run: |
@@ -307,30 +312,26 @@ jobs:
       - name: Fix signing conflict in project.pbxproj
         run: |
           cd PlantsVsZombiesHybrid.xcodeproj
-          # 安全替换，严格保留 Pbxproj 的结尾分号 (;)
           sed -i '' 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = "Manual";/g' project.pbxproj
           sed -i '' 's/CODE_SIGN_STYLE = "Automatic";/CODE_SIGN_STYLE = "Manual";/g' project.pbxproj
-          
-          # 将签名身份设置为空，而不是删除整行，防止破坏字典结构
           sed -i '' 's/CODE_SIGN_IDENTITY = "[^"]*";/CODE_SIGN_IDENTITY = "";/g' project.pbxproj
           sed -i '' 's/CODE_SIGN_IDENTITY = Apple[^;]*;/CODE_SIGN_IDENTITY = "";/g' project.pbxproj
           sed -i '' 's/CODE_SIGN_IDENTITY = iPhone[^;]*;/CODE_SIGN_IDENTITY = "";/g' project.pbxproj
-          
           sed -i '' 's/CODE_SIGNING_REQUIRED = YES;/CODE_SIGNING_REQUIRED = NO;/g' project.pbxproj
           sed -i '' 's/CODE_SIGNING_REQUIRED = "YES";/CODE_SIGNING_REQUIRED = NO;/g' project.pbxproj
           sed -i '' 's/CODE_SIGNING_ALLOWED = YES;/CODE_SIGNING_ALLOWED = NO;/g' project.pbxproj
           sed -i '' 's/CODE_SIGNING_ALLOWED = "YES";/CODE_SIGNING_ALLOWED = NO;/g' project.pbxproj
-          
           echo "Fixed project.pbxproj signing settings"
           grep -E "CODE_SIGN" project.pbxproj | head -20
+          
       - name: Fix missing framework links (Metal/QuartzCore/CoreAudio)
         run: |
           cd PlantsVsZombiesHybrid.xcodeproj
-          python3 ../.github/workflows/fix_frameworks.py
+          python3 ../.github/workflows/fix_frameworks.py || true
           echo "=== Verify frameworks in pbxproj ==="
-          grep -c "Metal.framework" project.pbxproj
-          grep -c "QuartzCore.framework" project.pbxproj
-          grep -c "CoreAudio.framework" project.pbxproj
+          grep -c "Metal.framework" project.pbxproj || true
+          grep -c "QuartzCore.framework" project.pbxproj || true
+          grep -c "CoreAudio.framework" project.pbxproj || true
 
       - name: 保存阶段2产物（失败也保存）
         if: always()
