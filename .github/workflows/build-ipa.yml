@@ -27,6 +27,8 @@ on:
 jobs:
   build:
     runs-on: macos-15
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -211,19 +213,18 @@ jobs:
           godot --headless --export-release "iOS" ../PlantsVsZombiesHybrid.xcodeproj 2>&1 | tail -30 || true
           cd ..
           ls PlantsVsZombiesHybrid.xcodeproj/ 2>/dev/null || ls | grep xcodeproj
-          # Detect scheme from pbxproj (default scheme = project name)
-          SCHEME=$(python3 -c "
+          # Detect scheme from pbxproj (write to file to avoid shell quote issues)
+          cat > detect_scheme.py << 'PYEOF'
           import re
           with open('PlantsVsZombiesHybrid.xcodeproj/project.pbxproj') as f:
               content = f.read()
-          # Try to get target name from PBXNativeTarget section
           m = re.search(r'PBXNativeTarget.*?\{.*?name = ([^;]+);', content, re.DOTALL)
           if m:
-              # Strip quotes that pbxproj may contain around names
               print(m.group(1).strip().strip('"'))
           else:
               print('PlantsVsZombiesHybrid')
-          ")
+          PYEOF
+          SCHEME=$(python3 detect_scheme.py)
           echo "SCHEME=$SCHEME" >> $GITHUB_ENV
           echo "Detected scheme: $SCHEME"
 
