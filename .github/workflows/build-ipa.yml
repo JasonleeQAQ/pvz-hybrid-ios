@@ -43,7 +43,6 @@ jobs:
       - name: Find and recover PCK
         id: recover
         run: |
-          # Find PCK file
           PCK=$(find extracted -name "*.pck" | head -1)
           if [ -z "$PCK" ]; then
             echo "ERROR: No PCK file found"
@@ -51,32 +50,18 @@ jobs:
           fi
           echo "Found PCK: $PCK"
           echo "pck=$PCK" >> $GITHUB_OUTPUT
-          
-          # Run GDRE recovery
           mkdir -p recovered
           java -jar $HOME/gdre.jar --recover "$PCK" --output recovered/ 2>&1 | tail -20
-          
-          # Detect Godot version
           if [ -f recovered/project.godot ]; then
-            GODOT_VERSION=$(head -5 recovered/project.godot | grep -oP 'config_version=\K\d+' || echo "4.7")
-            echo "Godot version: $GODOT_VERSION"
-            echo "godot_version=$GODOT_VERSION" >> $GITHUB_OUTPUT
+            echo "Godot project recovered successfully"
           fi
-          
           ls recovered/ | head -20
 
       - name: Fix export_presets.cfg for iPad fullscreen
         run: |
           PRESETS="recovered/export_presets.cfg"
-          if [ ! -f "$PRESETS" ]; then
-            echo "Creating export_presets.cfg..."
-            mkdir -p recovered
-          fi
-          
-          # Remove old iOS preset if exists
-          sed -i '' '/\[preset\.0\]/,/^\[/{/platform = "iOS"/d;}' "$PRESETS" 2>/dev/null || true
-          
-          cat > "$PRESETS" << 'PRESETS_EOF'
+          mkdir -p recovered
+          cat > "$PRESETS" << 'EOF'
 [preset.0]
 name="iOS"
 platform="iOS"
@@ -129,15 +114,13 @@ application/export_method_debug=0
 application/export_method_release=0
 application/code_sign_identity_debug=""
 application/code_sign_identity_release=""
-PRESETS_EOF
-          echo "export_presets.cfg updated"
-          cat "$PRESETS"
+EOF
+          echo "export_presets.cfg created"
 
       - name: Fix project.godot fullscreen config
         run: |
           PROJECT="recovered/project.godot"
           if [ -f "$PROJECT" ]; then
-            # Add stretch settings if not present
             if ! grep -q "display/window/stretch/mode" "$PROJECT"; then
               echo "" >> "$PROJECT"
               echo "[display]" >> "$PROJECT"
@@ -145,19 +128,15 @@ PRESETS_EOF
               echo "window/stretch/aspect=\"expand\"" >> "$PROJECT"
             fi
             echo "project.godot updated"
-            grep -A5 "stretch" "$PROJECT" || true
           fi
 
       - name: Install Godot 4.7.1 .NET
         run: |
           GODOT_VERSION="4.7.1"
           GODOT_URL="https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_mono_macos.universal.zip"
-          
           curl -L -o /tmp/godot.zip "$GODOT_URL"
           unzip -q /tmp/godot.zip -d /tmp/godot
           mv /tmp/godot/Godot_mono.app $HOME/Godot.app
-          
-          # Add to PATH
           echo "$HOME/Godot.app/Contents/MacOS" >> $GITHUB_PATH
           godot --version
 
@@ -165,15 +144,11 @@ PRESETS_EOF
         run: |
           TEMPLATES_VERSION="4.7.1"
           TEMPLATES_URL="https://github.com/godotengine/godot-builds/releases/download/${TEMPLATES_VERSION}-stable/Godot_v${TEMPLATES_VERSION}-stable_mono_ios.universal.zip"
-          
           curl -L -o /tmp/templates.zip "$TEMPLATES_URL"
-          
-          # Install templates
           TEMPLATES_DIR="$HOME/Library/Application Support/Godot/export_templates"
           mkdir -p "$TEMPLATES_DIR"
           unzip -q /tmp/templates.zip -d "$TEMPLATES_DIR"
-          
-          echo "Templates installed:"
+          echo "Templates installed"
           ls "$TEMPLATES_DIR"
 
       - name: Export Xcode project
@@ -185,26 +160,10 @@ PRESETS_EOF
       - name: Build unsigned IPA
         run: |
           cd PlantsVsZombiesHybrid.xcodeproj
-          
-          # Build without signing
-          xcodebuild -project PlantsVsZombiesHybrid.xcodeproj \
-            -scheme "PlantsVsZombies Hybrid" \
-            -configuration Release \
-            -destination 'generic/platform=iOS' \
-            -archivePath ../build/PlantsVsZombiesHybrid.xcarchive \
-            archive \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO 2>&1 | tail -30
-          
-          # Export IPA
+          xcodebuild -project PlantsVsZombiesHybrid.xcodeproj -scheme "PlantsVsZombies Hybrid" -configuration Release -destination 'generic/platform=iOS' -archivePath ../build/PlantsVsZombiesHybrid.xcarchive archive CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO 2>&1 | tail -30
           cd ..
           mkdir -p build/ipa
-          
-          xcodebuild -exportArchive \
-            -archivePath build/PlantsVsZombiesHybrid.xcarchive \
-            -exportPath build/ipa \
-            -exportOptionsPlist - << 'PLIST'
+          cat > build/export-options.plist << 'PLISTEOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -219,9 +178,8 @@ PRESETS_EOF
   <false/>
 </dict>
 </plist>
-PLIST
-          
-          # Find IPA
+PLISTEOF
+          xcodebuild -exportArchive -archivePath build/PlantsVsZombiesHybrid.xcarchive -exportPath build/ipa -exportOptionsPlist build/export-options.plist CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
           IPA=$(find build/ipa -name "*.ipa" | head -1)
           if [ -z "$IPA" ]; then
             echo "ERROR: No IPA found"
