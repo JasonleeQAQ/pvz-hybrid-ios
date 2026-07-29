@@ -18,6 +18,11 @@ on:
         required: false
         default: '0.25.5'
         type: string
+      team_id:
+        description: 'Apple Developer Team ID (10 chars, use AAAAAAAAAA for unsigned)'
+        required: false
+        default: 'AAAAAAAAAA'
+        type: string
 
 jobs:
   build:
@@ -79,6 +84,7 @@ jobs:
           app_name = sys.argv[1]
           bundle_id = sys.argv[2]
           version = sys.argv[3]
+          team_id = sys.argv[4]
           short_version = version
 
           lines = [
@@ -101,7 +107,7 @@ jobs:
               "[preset.0.options]",
               'custom_template/debug=""',
               'custom_template/release=""',
-              'application/app_store_team_id=""',
+              f'application/app_store_team_id="{team_id}"',
               'application/provisioning_profile_uuid_debug=""',
               'application/provisioning_profile_uuid_release=""',
               f'application/name="{app_name}"',
@@ -139,7 +145,7 @@ jobs:
               f.write("\n".join(lines) + "\n")
           print("export_presets.cfg generated")
           GENEOF
-          python3 generate_presets.py "${{ github.event.inputs.app_name }}" "${{ github.event.inputs.bundle_id }}" "${{ github.event.inputs.version }}"
+          python3 generate_presets.py "${{ github.event.inputs.app_name }}" "${{ github.event.inputs.bundle_id }}" "${{ github.event.inputs.version }}" "${{ github.event.inputs.team_id }}"
 
       - name: Install Godot 4.7.1 .NET
         run: |
