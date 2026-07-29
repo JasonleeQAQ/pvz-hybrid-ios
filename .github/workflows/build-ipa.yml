@@ -32,7 +32,7 @@ jobs:
 
       - name: Download ZIP
         run: |
-          curl -L -o source.zip '${{ github.event.inputs.source_url }}'
+          curl --fail --location --retry 5 --retry-all-errors --retry-delay 3 --continue-at - --output source.zip "${{ github.event.inputs.source_url }}"
           ls -la source.zip
 
       - name: Install 7-Zip (Deflate64 support)
