@@ -26,7 +26,7 @@ name: Build iOS IPA
       force_recover:
         description: 'Force GDRE recovery (disable cache)'
         required: false
-        default: true
+        default: false
         type: boolean
 
 jobs:
@@ -134,11 +134,8 @@ jobs:
           GODOT_SDK=""
           TF=""
           if [ -n "$CSPROJ_FILE" ]; then
-            GODOT_SDK=$(grep -oP 'Godot\.NET\.Sdk/\K[0-9]+\.[0-9]+\.[0-9]+' "$CSPROJ_FILE" | head -1)
-            if [ -z "$GODOT_SDK" ]; then
-              GODOT_SDK=$(grep -oP 'Godot\.NET\.Sdk/\K[0-9]+\.[0-9]+' "$CSPROJ_FILE" | head -1)
-            fi
-            TF=$(grep -oP '<TargetFramework>\Knet[0-9]+' "$CSPROJ_FILE" | head -1)
+            GODOT_SDK=$(python3 -c "import re; c=open('$CSPROJ_FILE').read(); m=re.search(r'Godot\\.NET\\.Sdk/([0-9]+\\.[0-9]+\\.[0-9]+)',c); print(m.group(1)) if m else (print(re.search(r'Godot\\.NET\\.Sdk/([0-9]+\\.[0-9]+)',c).group(1)) if re.search(r'Godot\\.NET\\.Sdk/([0-9]+\\.[0-9]+)',c) else print(''))")
+            TF=$(python3 -c "import re; c=open('$CSPROJ_FILE').read(); m=re.search(r'<TargetFramework>net([0-9]+)',c); print('net'+m.group(1)) if m else print('')")
           fi
 
           # .NET 版本：global.json > csproj > 默认 8.0
