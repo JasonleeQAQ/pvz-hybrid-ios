@@ -31,7 +31,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
+      # ========== 断点恢复：尝试拉取上次中间产物 ==========
+      - name: 恢复阶段1-GDRE恢复产物
+        id: recover-stage
+        continue-on-error: true
+        uses: actions/cache@v4
+        with:
+          path: recovered/
+          key: gdre-recovery-${{ runner.os }}-${{ hashFiles('source.zip') }}
+          restore-keys: |
+            gdre-recovery-${{ runner.os }}-
+
+      - name: 恢复阶段2-Godot安装
+        id: godot-cache
+        uses: actions/cache@v4
+        with:
+          path: $HOME/Godot.app
+          key: godot-4.7.1-dotnet-macos
+
+      # ========== 阶段1：下载 + GDRE 恢复 ==========
       - name: Download ZIP from Release
+        if: steps.recover-stage.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -40,21 +60,25 @@ jobs:
           ls -la source.zip
 
       - name: Install 7-Zip (Deflate64 support)
+        if: steps.recover-stage.outputs.cache-hit != 'true'
         run: |
           brew install p7zip
 
       - name: Unzip project
+        if: steps.recover-stage.outputs.cache-hit != 'true'
         run: |
           7z x source.zip -oextracted -y
           ls extracted/
 
       - name: Setup Java 17
+        if: steps.recover-stage.outputs.cache-hit != 'true'
         uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
 
       - name: Install GDRE
+        if: steps.recover-stage.outputs.cache-hit != 'true'
         run: |
           curl -L -o gdre-macos.zip "https://github.com/GDRETools/gdsdecomp/releases/download/v2.6.0/GDRE_tools-v2.6.0-macos.zip"
           unzip -q gdre-macos.zip -d gdre_extracted
@@ -65,6 +89,7 @@ jobs:
 
       - name: Find and recover PCK
         id: recover
+        if: steps.recover-stage.outputs.cache-hit != 'true'
         run: |
           PCK=$(find extracted -name "*.pck" | head -1)
           if [ -z "$PCK" ]; then
@@ -77,6 +102,15 @@ jobs:
           "$GDRE_BIN" --recover="$PCK" --output=recovered/ 2>&1 | tail -20
           ls recovered/ | head -10
 
+      - name: 保存阶段1产物（失败也保存）
+        if: always() && steps.recover-stage.outputs.cache-hit != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage-recovered
+          path: recovered/
+          retention-days: 7
+
+      # ========== 阶段2：Godot 安装 + 导出 ==========
       - name: Generate export_presets.cfg
         run: |
           cat > generate_presets.py << 'GENEOF'
@@ -148,6 +182,7 @@ jobs:
           python3 generate_presets.py "${{ github.event.inputs.app_name }}" "${{ github.event.inputs.bundle_id }}" "${{ github.event.inputs.version }}" "${{ github.event.inputs.team_id }}"
 
       - name: Install Godot 4.7.1 .NET
+        if: steps.godot-cache.outputs.cache-hit != 'true'
         run: |
           curl -L -o godot.zip "https://github.com/godotengine/godot-builds/releases/download/4.7.1-stable/Godot_v4.7.1-stable_mono_macos.universal.zip"
           unzip -q godot.zip -d godot_extracted
@@ -171,12 +206,15 @@ jobs:
       - name: Export Xcode project
         run: |
           cd recovered
-          godot --headless --export-release "iOS" ../PlantsVsZombiesHybrid.xcodeproj 2>&1 | tail -30
-          ls ../PlantsVsZombiesHybrid.xcodeproj/ 2>/dev/null || ls ../ | grep xcodeproj
+          # Godot 4.7 iOS 导出会内部运行 xcodebuild，签名冲突会导致失败
+          # 但即使内部失败，xcodeproj 文件仍会被创建，我们后续手动构建
+          godot --headless --export-release "iOS" ../PlantsVsZombiesHybrid.xcodeproj 2>&1 | tail -30 || true
+          cd ..
+          ls PlantsVsZombiesHybrid.xcodeproj/ 2>/dev/null || ls | grep xcodeproj
           # Detect scheme from pbxproj (default scheme = project name)
           SCHEME=$(python3 -c "
           import re
-          with open('../PlantsVsZombiesHybrid.xcodeproj/project.pbxproj') as f:
+          with open('PlantsVsZombiesHybrid.xcodeproj/project.pbxproj') as f:
               content = f.read()
           # Try to get target name from PBXNativeTarget section
           m = re.search(r'PBXNativeTarget.*?\{.*?name = ([^;]+);', content, re.DOTALL)
@@ -194,7 +232,7 @@ jobs:
           # Uses 'expand' aspect (ignore removed in 4.7) — viewport matches screen aspect, no letterbox
           GODOT_FILE="recovered/project.godot"
           if [ -f "$GODOT_FILE" ]; then
-            if grep -q '^\[display\]' "$GODOT_FILE"; then
+            if grep -q '^\[display\]' "$GODOT_FILE" ]; then
               echo "[display] section exists"
             else
               echo "" >> "$GODOT_FILE"
@@ -253,31 +291,39 @@ jobs:
           echo "Fixed project.pbxproj signing settings"
           grep -E "CODE_SIGN" project.pbxproj | head -20
 
+      - name: 保存阶段2产物（失败也保存）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage-xcodeproj
+          path: PlantsVsZombiesHybrid.xcodeproj/
+          retention-days: 7
+
+      # ========== 阶段3：构建 IPA ==========
       - name: Build unsigned IPA
         run: |
-          cd PlantsVsZombiesHybrid.xcodeproj
+          # 注意：不要 cd 进 xcodeproj，从根目录运行 xcodebuild
           SCHEME="${SCHEME:-${{ github.event.inputs.app_name }}}"
           echo "Building with scheme: $SCHEME"
           xcodebuild -project PlantsVsZombiesHybrid.xcodeproj \
             -scheme "$SCHEME" \
             -configuration Release \
             -sdk iphoneos \
-            -derivedDataPath ../build \
+            -derivedDataPath build \
             build \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO 2>&1 | tail -40
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tail -50
           # Find the built .app
-          APP_DIR="../build/Build/Products/Release-iphoneos"
+          APP_DIR="build/Build/Products/Release-iphoneos"
           APP=$(find "$APP_DIR" -maxdepth 1 -name "*.app" 2>/dev/null | head -1)
           if [ -z "$APP" ]; then
             echo "ERROR: .app not found in $APP_DIR"
-            find ../build -name "*.app" 2>/dev/null || echo "No .app found at all"
+            find build -name "*.app" 2>/dev/null || echo "No .app found at all"
             exit 1
           fi
           echo "APP found: $APP"
           ls -la "$APP" | head -5
-          cd ..
           # Package IPA (Payload/*.app → zip)
           APP_BASENAME=$(basename "$APP")
           rm -rf ipa
@@ -292,6 +338,14 @@ jobs:
           echo "IPA_NAME=$IPA_NAME" >> $GITHUB_ENV
           ls -la "$IPA_NAME"
 
+      - name: 保存阶段3产物（失败也保存）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage-ipa
+          path: pvz-hybrid.ipa
+          retention-days: 7
+
       - name: Create Release and upload IPA
         env:
           GH_TOKEN: ${{ secrets.PAT }}
@@ -305,9 +359,3 @@ jobs:
           fi
           gh release upload "$RELEASE_TAG" "${{ env.IPA_NAME }}" --clobber
           echo "IPA uploaded to release $RELEASE_TAG"
-
-      - name: Upload IPA artifact
-        uses: actions/upload-artifact@v5
-        with:
-          name: pvz-hybrid-ipa
-          path: pvz-hybrid.ipa
