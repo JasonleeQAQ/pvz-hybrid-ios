@@ -315,14 +315,9 @@ jobs:
           sed -i '' 's/CODE_SIGNING_ALLOWED = YES;/CODE_SIGNING_ALLOWED = NO;/g' project.pbxproj
           sed -i '' 's/CODE_SIGNING_ALLOWED = "YES";/CODE_SIGNING_ALLOWED = NO;/g' project.pbxproj
           
-          echo "Fixed project.pbxproj signing settings"
       - name: Fix missing framework links (Metal/QuartzCore)
         run: |
-          cd PlantsVsZombiesHybrid.xcodeproj
-          python3 ../.github/workflows/fix_frameworks.py
-          echo "=== Verify frameworks in pbxproj ==="
-          grep -c "Metal.framework" project.pbxproj
-          grep -c "QuartzCore.framework" project.pbxproj
+          echo "Frameworks will be linked via xcodebuild OTHER_LDFLAGS"
 
       - name: 保存阶段2产物（失败也保存）
         if: always()
@@ -350,6 +345,7 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO 2>&1 | tail -50
+            OTHER_LDFLAGS="-framework Metal -framework QuartzCore -framework AudioUnit -framework CoreAudioTypes" \\
           XCODE_EXIT=${PIPESTATUS[0]}
           if [ "$XCODE_EXIT" -ne 0 ]; then
             echo "ERROR: xcodebuild failed with exit code $XCODE_EXIT"
