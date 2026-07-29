@@ -28,12 +28,11 @@ jobs:
     runs-on: macos-15
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download ZIP
         run: |
-          echo "URL: ${{ github.event.inputs.source_url }}"
-          curl -L -v -o source.zip '${{ github.event.inputs.source_url }}' 2>&1 | tail -20
+          curl -L -o source.zip '${{ github.event.inputs.source_url }}'
           ls -la source.zip
 
       - name: Install 7-Zip (Deflate64 support)
@@ -46,7 +45,7 @@ jobs:
           ls extracted/
 
       - name: Setup Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -221,7 +220,7 @@ jobs:
           echo "IPA uploaded to release $RELEASE_TAG"
 
       - name: Upload IPA artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: pvz-hybrid-ipa
           path: ${{ env.IPA_NAME }}
