@@ -1,6 +1,6 @@
 name: Build iOS IPA
 
-on:
+'on':
   workflow_dispatch:
     inputs:
       app_name:
@@ -126,15 +126,7 @@ jobs:
           # 优先从 global.json 读 .NET 版本
           DOTNET_VER=""
           if [ -f "$GLOBAL_JSON" ]; then
-            DOTNET_VER=$(python3 -c "
-import json
-with open('$GLOBAL_JSON') as f:
-    d = json.load(f)
-v = d.get('sdk', {}).get('version', '')
-if v:
-    parts = v.split('.')
-    print(f'{parts[0]}.{parts[1]}')
-" 2>/dev/null || true)
+            DOTNET_VER=$(python3 -c 'import json; d=json.load(open("'"$GLOBAL_JSON"'")); v=d.get("sdk",{}).get("version",""); print(f"{v.split(chr(46))[0]}.{v.split(chr(46))[1]}") if v else print("")' 2>/dev/null || true)
           fi
 
           # 从 .csproj 读 Godot SDK 版本和 TargetFramework
@@ -165,73 +157,7 @@ if v:
 
       - name: Generate export_presets.cfg
         run: |
-          cat > generate_presets.py << 'GENEOF'
-          import sys
-          app_name = sys.argv[1]
-          bundle_id = sys.argv[2]
-          version = sys.argv[3]
-          team_id = sys.argv[4]
-          short_version = version
-
-          lines = [
-              "[preset.0]",
-              'name="iOS"',
-              'platform="iOS"',
-              "runnable=true",
-              "advanced_options=false",
-              "dedicated_server=false",
-              'custom_features=""',
-              'export_filter="all_resources"',
-              'include_filter=""',
-              'exclude_filter=""',
-              'export_path="../PlantsVsZombiesHybrid.xcodeproj"',
-              'encryption_include_filters=""',
-              'encryption_exclude_filters=""',
-              "encrypt_pck=false",
-              "encrypt_directory=false",
-              "",
-              "[preset.0.options]",
-              'custom_template/debug=""',
-              'custom_template/release=""',
-              f'application/app_store_team_id="{team_id}"',
-              'application/provisioning_profile_uuid_debug=""',
-              'application/provisioning_profile_uuid_release=""',
-              f'application/name="{app_name}"',
-              'application/info="Made with Godot Engine"',
-              'application/signature=""',
-              f'application/version="{version}.0"',
-              f'application/bundle_identifier="{bundle_id}"',
-              "application/categories=PackedStringArray()",
-              f'application/short_version="{short_version}"',
-              'application/min_ios_version="16.0"',
-              "application/orientation/portrait=false",
-              "application/orientation/landscape_left=true",
-              "application/orientation/landscape_right=true",
-              "application/orientation/portrait_upside_down=false",
-              'application/interruption_policy="stop"',
-              "application/supports_opengl=false",
-              "application/supports_metal=true",
-              "application/supports_open_gles2=false",
-              "application/supports_open_gles3=true",
-              "application/supports_vulkan=false",
-              'application/icon="res://icon.png"',
-              'application/additional_plist_content=""',
-              "capabilities/access_wifi=false",
-              "capabilities/push_notifications=false",
-              "capabilities/performance_gaming=false",
-              "capabilities/performance_a12=false",
-              "user_data/accessible_files_directories=PackedStringArray()",
-              'architecture/target="arm64"',
-              "application/export_method_debug=0",
-              "application/export_method_release=0",
-              'application/code_sign_identity_debug=""',
-              'application/code_sign_identity_release=""',
-          ]
-          with open("recovered/export_presets.cfg", "w") as f:
-              f.write("\n".join(lines) + "\n")
-          print("export_presets.cfg generated")
-          GENEOF
-          python3 generate_presets.py "${{ github.event.inputs.app_name }}" "${{ github.event.inputs.bundle_id }}" "${{ github.event.inputs.version }}" "${{ github.event.inputs.team_id }}"
+          python3 .github/workflows/generate_presets.py "${{ github.event.inputs.app_name }}" "${{ github.event.inputs.bundle_id }}" "${{ github.event.inputs.version }}" "${{ github.event.inputs.team_id }}"
 
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v4
@@ -329,66 +255,32 @@ if v:
           godot --headless --export-release "iOS" ../PlantsVsZombiesHybrid.xcodeproj 2>&1 | tail -30 || true
           cd ..
           ls PlantsVsZombiesHybrid.xcodeproj/ 2>/dev/null || ls | grep xcodeproj
-          cat > detect_scheme.py << 'PYEOF'
-          import re
-          with open('PlantsVsZombiesHybrid.xcodeproj/project.pbxproj') as f:
-              content = f.read()
-          m = re.search(r'PBXNativeTarget.*?\{.*?name = ([^;]+);', content, re.DOTALL)
-          if m:
-              print(m.group(1).strip().strip('"'))
-          else:
-              print('PlantsVsZombiesHybrid')
-          PYEOF
-          SCHEME=$(python3 detect_scheme.py)
+          SCHEME=$(python3 .github/workflows/detect_scheme.py)
           echo "SCHEME=$SCHEME" >> $GITHUB_ENV
           echo "Detected scheme: $SCHEME"
 
       - name: Patch project.godot for iPad fullscreen (stretch=expand)
         run: |
           GODOT_FILE="recovered/project.godot"
-          if [ -f "$GODOT_FILE" ]; then
-            if grep -q '^\[display\]' "$GODOT_FILE" ]; then
-              echo "[display] section exists"
-            else
-              echo "" >> "$GODOT_FILE"
-              echo "[display]" >> "$GODOT_FILE"
-            fi
-            sed -i '' '/^window\/stretch\/mode/d' "$GODOT_FILE"
-            sed -i '' '/^window\/stretch\/aspect/d' "$GODOT_FILE"
-            sed -i '' '/^window\/stretch\/scale/d' "$GODOT_FILE"
-            sed -i '' '/^window\/size\/viewport_width/d' "$GODOT_FILE"
-            sed -i '' '/^window\/size\/viewport_height/d' "$GODOT_FILE"
-            sed -i '' '/^window\/size\/window_width_override/d' "$GODOT_FILE"
-            sed -i '' '/^window\/size\/window_height_override/d' "$GODOT_FILE"
-            python3 - << 'PYEOF'
-          import re
-          path = "recovered/project.godot"
-          with open(path) as f:
-              content = f.read()
-          for key in ["window/stretch/mode", "window/stretch/aspect", "window/stretch/scale",
-                       "window/size/viewport_width", "window/size/viewport_height",
-                       "window/size/window_width_override", "window/size/window_height_override"]:
-              content = re.sub(rf'^{re.escape(key)}=.*\n?', '', content, flags=re.MULTILINE)
-          if '[display]' not in content:
-              content += '\n[display]\n'
-          stretch = ('window/stretch/mode="canvas_items"\n'
-                     'window/stretch/aspect="expand"\n'
-                     'window/stretch/scale="1.0"\n'
-                     'window/size/viewport_width=2388\n'
-                     'window/size/viewport_height=1668\n'
-                     'window/size/window_width_override=2388\n'
-                     'window/size/window_height_override=1668\n')
-          content = content.replace('[display]\n', '[display]\n' + stretch, 1)
-          with open(path, 'w') as f:
-              f.write(content)
-          print("Patched [display] section")
-          PYEOF
-            echo "=== Patched [display] section ==="
-            grep -A 10 '^\[display\]' "$GODOT_FILE" | head -15
-          else
+          if [ ! -f "$GODOT_FILE" ]; then
             echo "WARNING: project.godot not found at $GODOT_FILE"
             ls recovered/ | head -10
+            exit 0
           fi
+          if ! grep -q '^\[display\]' "$GODOT_FILE"; then
+            echo "" >> "$GODOT_FILE"
+            echo "[display]" >> "$GODOT_FILE"
+          fi
+          sed -i '' '/^window\/stretch\/mode/d' "$GODOT_FILE"
+          sed -i '' '/^window\/stretch\/aspect/d' "$GODOT_FILE"
+          sed -i '' '/^window\/stretch\/scale/d' "$GODOT_FILE"
+          sed -i '' '/^window\/size\/viewport_width/d' "$GODOT_FILE"
+          sed -i '' '/^window\/size\/viewport_height/d' "$GODOT_FILE"
+          sed -i '' '/^window\/size\/window_width_override/d' "$GODOT_FILE"
+          sed -i '' '/^window\/size\/window_height_override/d' "$GODOT_FILE"
+          python3 .github/workflows/patch_godot_display.py
+          echo "=== Patched [display] section ==="
+          grep -A 10 '^\[display\]' "$GODOT_FILE" | head -15
 
       - name: Fix signing conflict in project.pbxproj
         run: |
