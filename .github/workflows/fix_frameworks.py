@@ -111,5 +111,5 @@ def add_frameworks(pbxproj_path, frameworks):
 if __name__ == '__main__':
     add_frameworks(
         "project.pbxproj",
-        ["Metal.framework", "QuartzCore.framework"]
+        ["Metal.framework", "QuartzCore.framework", "CoreAudio.framework"]
     )
