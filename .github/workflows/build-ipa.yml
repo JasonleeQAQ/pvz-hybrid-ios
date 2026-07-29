@@ -52,8 +52,12 @@ jobs:
 
       - name: Install GDRE
         run: |
-          curl -L -o gdre.jar "https://github.com/GDRETools/gdsdecomp/releases/download/v2.6.3/gdsdecomp-2.6.3-standalone.jar"
-          echo "GDRE installed"
+          curl -L -o gdre-macos.zip "https://github.com/GDRETools/gdsdecomp/releases/download/v2.6.0/GDRE_tools-v2.6.0-macos.zip"
+          unzip -q gdre-macos.zip -d gdre_extracted
+          GDRE_BIN="gdre_extracted/Godot RE Tools.app/Contents/MacOS/Godot RE Tools"
+          chmod +x "$GDRE_BIN"
+          echo "GDRE installed: $GDRE_BIN"
+          "$GDRE_BIN" --help 2>&1 | head -5 || true
 
       - name: Find and recover PCK
         id: recover
@@ -65,7 +69,8 @@ jobs:
           fi
           echo "Found PCK: $PCK"
           mkdir -p recovered
-          java -jar gdre.jar --recover "$PCK" --output recovered/ 2>&1 | tail -20
+          GDRE_BIN="gdre_extracted/Godot RE Tools.app/Contents/MacOS/Godot RE Tools"
+          "$GDRE_BIN" --recover="$PCK" --output recovered/ 2>&1 | tail -20
           ls recovered/ | head -10
 
       - name: Generate export_presets.cfg
@@ -142,8 +147,9 @@ jobs:
           curl -L -o godot.zip "https://github.com/godotengine/godot-builds/releases/download/4.7.1-stable/Godot_v4.7.1-stable_mono_macos.universal.zip"
           unzip -q godot.zip -d godot_extracted
           mv godot_extracted/Godot_mono.app $HOME/Godot.app
-          echo "$HOME/Godot.app/Contents/MacOS" >> $GITHUB_PATH
-          godot --version
+          GODOT="$HOME/Godot.app/Contents/MacOS"
+          echo "$GODOT" >> $GITHUB_PATH
+          "$GODOT/Godot" --version
 
       - name: Install iOS export templates
         run: |
