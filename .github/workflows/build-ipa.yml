@@ -180,7 +180,7 @@ jobs:
           set -euo pipefail
           GODOT_VER="${{ steps.detect.outputs.godot_version }}"
           echo "Downloading Godot $GODOT_VER Mono"
-          curl -L -o godot.zip "https://godot-releases.nbg1.your-objectstorage.com/${GODOT_VER}/Godot_v${GODOT_VER}_mono_macos.universal.zip"
+          curl -L -o godot.zip "https://godot-releases.nbg1.your-objectstorage.com/${GODOT_VER%.0-stable}-stable/Godot_v${GODOT_VER}_mono_macos.universal.zip"
           unzip -q godot.zip -d godot_extracted
           mv godot_extracted/Godot_mono.app $HOME/Godot.app
           GODOT="$HOME/Godot.app/Contents/MacOS"
@@ -213,7 +213,7 @@ jobs:
           set -euo pipefail
           GODOT_VER="${{ steps.detect.outputs.godot_version }}"
           echo "Downloading export templates for Godot $GODOT_VER"
-          curl -L -o templates.tpz "https://godot-releases.nbg1.your-objectstorage.com/${GODOT_VER}/Godot_v${GODOT_VER}_mono_export_templates.tpz"
+          curl -L -o templates.tpz "https://godot-releases.nbg1.your-objectstorage.com/${GODOT_VER%.0-stable}-stable/Godot_v${GODOT_VER}_mono_export_templates.tpz"
           TEMPLATES_DIR="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VER}.mono"
           mkdir -p "$TEMPLATES_DIR"
           unzip -q templates.tpz -d /tmp/templates_extract
