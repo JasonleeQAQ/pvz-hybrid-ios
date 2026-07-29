@@ -219,7 +219,8 @@ jobs:
           # Try to get target name from PBXNativeTarget section
           m = re.search(r'PBXNativeTarget.*?\{.*?name = ([^;]+);', content, re.DOTALL)
           if m:
-              print(m.group(1).strip())
+              # Strip quotes that pbxproj may contain around names
+              print(m.group(1).strip().strip('"'))
           else:
               print('PlantsVsZombiesHybrid')
           ")
@@ -283,11 +284,17 @@ jobs:
       - name: Fix signing conflict in project.pbxproj
         run: |
           cd PlantsVsZombiesHybrid.xcodeproj
-          sed -i '' 's/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g' project.pbxproj
+          # pbxproj 中值可能带引号，用通用模式匹配
+          sed -i '' 's/CODE_SIGN_STYLE = .*Automatic.*/CODE_SIGN_STYLE = Manual/g' project.pbxproj
           sed -i '' '/CODE_SIGN_IDENTITY = "Apple Distribution"/d' project.pbxproj
           sed -i '' '/CODE_SIGN_IDENTITY = "iPhone Distribution"/d' project.pbxproj
+          sed -i '' '/CODE_SIGN_IDENTITY = "Apple Development"/d' project.pbxproj
           sed -i '' 's/CODE_SIGNING_REQUIRED = YES/CODE_SIGNING_REQUIRED = NO/g' project.pbxproj
           sed -i '' 's/CODE_SIGNING_ALLOWED = YES/CODE_SIGNING_ALLOWED = NO/g' project.pbxproj
+          # 也处理带引号的格式
+          sed -i '' 's/CODE_SIGN_STYLE = "Automatic"/CODE_SIGN_STYLE = Manual/g' project.pbxproj
+          sed -i '' 's/CODE_SIGNING_REQUIRED = "YES"/CODE_SIGNING_REQUIRED = NO/g' project.pbxproj
+          sed -i '' 's/CODE_SIGNING_ALLOWED = "YES"/CODE_SIGNING_ALLOWED = NO/g' project.pbxproj
           echo "Fixed project.pbxproj signing settings"
           grep -E "CODE_SIGN" project.pbxproj | head -20
 
@@ -303,8 +310,12 @@ jobs:
       - name: Build unsigned IPA
         run: |
           # 注意：不要 cd 进 xcodeproj，从根目录运行 xcodebuild
+          # 去掉 SCHEME 中可能存在的字面引号（pbxproj 中 name = "X" 格式会导致捕获引号）
+          SCHEME="${SCHEME//\"}"
           SCHEME="${SCHEME:-${{ github.event.inputs.app_name }}}"
           echo "Building with scheme: $SCHEME"
+          # 列出可用 scheme 用于调试
+          xcodebuild -project PlantsVsZombiesHybrid.xcodeproj -list 2>&1 | head -20
           xcodebuild -project PlantsVsZombiesHybrid.xcodeproj \
             -scheme "$SCHEME" \
             -configuration Release \
