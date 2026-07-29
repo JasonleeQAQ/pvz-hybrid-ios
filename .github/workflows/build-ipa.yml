@@ -35,9 +35,13 @@ jobs:
           curl -L -o source.zip "${{ github.event.inputs.source_url }}"
           ls -la source.zip
 
+      - name: Install 7-Zip (Deflate64 support)
+        run: |
+          brew install p7zip
+
       - name: Unzip project
         run: |
-          unzip -q source.zip -d extracted
+          7zz x source.zip -oextracted -y
           ls extracted/
 
       - name: Setup Java 17
