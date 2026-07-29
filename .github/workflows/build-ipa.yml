@@ -27,9 +27,11 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Download ZIP from Release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           RELEASE_TAG="v${{ github.event.inputs.version }}"
-          curl --fail --location --retry 5 --retry-all-errors --retry-delay 3 --continue-at - --output source.zip "https://github.com/${{ github.repository }}/releases/download/$RELEASE_TAG/source.zip"
+          gh release download "$RELEASE_TAG" --pattern "source.zip"
           ls -la source.zip
 
       - name: Install 7-Zip (Deflate64 support)
