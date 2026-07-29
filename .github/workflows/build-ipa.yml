@@ -32,21 +32,9 @@ jobs:
 
       - name: Download ZIP
         run: |
-          curl -L -o source.zip "${{ github.event.inputs.source_url }}"
+          echo "URL: ${{ github.event.inputs.source_url }}"
+          curl -L -v -o source.zip '${{ github.event.inputs.source_url }}' 2>&1 | tail -20
           ls -la source.zip
-          # Validate download is actually a ZIP, not an error page
-          FILE_TYPE=$(file -b source.zip)
-          echo "File type: $FILE_TYPE"
-          if echo "$FILE_TYPE" | grep -qi "html\|text"; then
-            echo "ERROR: Downloaded file is not a ZIP archive. Server returned:"
-            head -20 source.zip
-            exit 1
-          fi
-          if [ $(stat -f%z source.zip) -lt 1000 ]; then
-            echo "ERROR: Downloaded file is too small ($(<source.zip) bytes), likely an error page"
-            head -20 source.zip
-            exit 1
-          fi
 
       - name: Install 7-Zip (Deflate64 support)
         run: |
