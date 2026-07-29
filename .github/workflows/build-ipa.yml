@@ -12,18 +12,21 @@ jobs:
   build:
     runs-on: macos-15
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Download ZIP from provided URL
         run: |
           curl -L -o source.zip "${{ github.event.inputs.source_url }}"
           ls -la source.zip
           file source.zip
 
-      - name: Unzip
+      - name: Unzip project
         run: |
           unzip -q source.zip -d extracted
           ls extracted/
 
-      - name: Setup Java
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -31,39 +34,212 @@ jobs:
 
       - name: Install GDRE
         run: |
-          curl -L -o /tmp/gdre.jar "https://github.com/GDRETools/gdsdecomp/releases/download/v2.6.3/gdsdecomp-2.6.3-standalone.jar"
-          mkdir -p $HOME/.local/opt/gdre
-          cp /tmp/gdre.jar $HOME/.local/opt/gdre/gdre.jar
+          GDRE_VERSION="2.6.3"
+          GDRE_URL="https://github.com/GDRETools/gdsdecomp/releases/download/v${GDRE_VERSION}/gdsdecomp-${GDRE_VERSION}-standalone.jar"
+          curl -L -o $HOME/gdre.jar "$GDRE_URL"
+          echo "GDRE installed: $HOME/gdre.jar"
+          ls -la $HOME/gdre.jar
 
-      - name: Recover Godot project via GDRE
+      - name: Find and recover PCK
+        id: recover
         run: |
+          # Find PCK file
           PCK=$(find extracted -name "*.pck" | head -1)
           if [ -z "$PCK" ]; then
-            echo "No PCK found"
+            echo "ERROR: No PCK file found"
             exit 1
           fi
           echo "Found PCK: $PCK"
-          cd extracted
-          java -jar $HOME/.local/opt/gdre/gdre.jar --recover "$PCK" --output ../recovered
+          echo "pck=$PCK" >> $GITHUB_OUTPUT
+          
+          # Run GDRE recovery
+          mkdir -p recovered
+          java -jar $HOME/gdre.jar --recover "$PCK" --output recovered/ 2>&1 | tail -20
+          
+          # Detect Godot version
+          if [ -f recovered/project.godot ]; then
+            GODOT_VERSION=$(head -5 recovered/project.godot | grep -oP 'config_version=\K\d+' || echo "4.7")
+            echo "Godot version: $GODOT_VERSION"
+            echo "godot_version=$GODOT_VERSION" >> $GITHUB_OUTPUT
+          fi
+          
+          ls recovered/ | head -20
 
-      - name: Fix fullscreen config
+      - name: Fix export_presets.cfg for iPad fullscreen
         run: |
-          echo "Fixing fullscreen config..."
+          PRESETS="recovered/export_presets.cfg"
+          if [ ! -f "$PRESETS" ]; then
+            echo "Creating export_presets.cfg..."
+            mkdir -p recovered
+          fi
+          
+          # Remove old iOS preset if exists
+          sed -i '' '/\[preset\.0\]/,/^\[/{/platform = "iOS"/d;}' "$PRESETS" 2>/dev/null || true
+          
+          cat > "$PRESETS" << 'PRESETS_EOF'
+[preset.0]
+name="iOS"
+platform="iOS"
+runnable=true
+advanced_options=false
+dedicated_server=false
+custom_features=""
+export_filter="all_resources"
+include_filter=""
+exclude_filter=""
+export_path="../PlantsVsZombiesHybrid.xcodeproj"
+encryption_include_filters=""
+encryption_exclude_filters=""
+encrypt_pck=false
+encrypt_directory=false
 
-      - name: Install Godot .NET + iOS templates
+[preset.0.options]
+custom_template/debug=""
+custom_template/release=""
+application/app_store_team_id=""
+application/provisioning_profile_uuid_debug=""
+application/provisioning_profile_uuid_release=""
+application/name="PlantsVsZombies Hybrid"
+application/info="Made with Godot Engine"
+application/signature=""
+application/version="0.25.5.0"
+application/bundle_identifier="com.plantsvszombies.hybrid"
+application/categories=PackedStringArray()
+application/short_version="0.25.5"
+application/min_ios_version="16.0"
+application/orientation/portrait=false
+application/orientation/landscape_left=true
+application/orientation/landscape_right=true
+application/orientation/portrait_upside_down=false
+application/interruption_policy="stop"
+application/supports_opengl=false
+application/supports_metal=true
+application/supports_open_gles2=false
+application/supports_open_gles3=true
+application/supports_vulkan=false
+application/icon="res://icon.png"
+application/additional_plist_content=""
+capabilities/access_wifi=false
+capabilities/push_notifications=false
+capabilities/performance_gaming=false
+capabilities/performance_a12=false
+user_data/accessible_files_directories=PackedStringArray()
+architecture/target="arm64"
+application/export_method_debug=0
+application/export_method_release=0
+application/code_sign_identity_debug=""
+application/code_sign_identity_release=""
+PRESETS_EOF
+          echo "export_presets.cfg updated"
+          cat "$PRESETS"
+
+      - name: Fix project.godot fullscreen config
         run: |
-          echo "Installing Godot..."
+          PROJECT="recovered/project.godot"
+          if [ -f "$PROJECT" ]; then
+            # Add stretch settings if not present
+            if ! grep -q "display/window/stretch/mode" "$PROJECT"; then
+              echo "" >> "$PROJECT"
+              echo "[display]" >> "$PROJECT"
+              echo "window/stretch/mode=\"viewport\"" >> "$PROJECT"
+              echo "window/stretch/aspect=\"expand\"" >> "$PROJECT"
+            fi
+            echo "project.godot updated"
+            grep -A5 "stretch" "$PROJECT" || true
+          fi
+
+      - name: Install Godot 4.7.1 .NET
+        run: |
+          GODOT_VERSION="4.7.1"
+          GODOT_URL="https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_mono_macos.universal.zip"
+          
+          curl -L -o /tmp/godot.zip "$GODOT_URL"
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          mv /tmp/godot/Godot_mono.app $HOME/Godot.app
+          
+          # Add to PATH
+          echo "$HOME/Godot.app/Contents/MacOS" >> $GITHUB_PATH
+          godot --version
+
+      - name: Install Godot iOS export templates
+        run: |
+          TEMPLATES_VERSION="4.7.1"
+          TEMPLATES_URL="https://github.com/godotengine/godot-builds/releases/download/${TEMPLATES_VERSION}-stable/Godot_v${TEMPLATES_VERSION}-stable_mono_ios.universal.zip"
+          
+          curl -L -o /tmp/templates.zip "$TEMPLATES_URL"
+          
+          # Install templates
+          TEMPLATES_DIR="$HOME/Library/Application Support/Godot/export_templates"
+          mkdir -p "$TEMPLATES_DIR"
+          unzip -q /tmp/templates.zip -d "$TEMPLATES_DIR"
+          
+          echo "Templates installed:"
+          ls "$TEMPLATES_DIR"
 
       - name: Export Xcode project
         run: |
-          echo "Exporting Xcode project..."
+          cd recovered
+          godot --headless --export-release "iOS" ../PlantsVsZombiesHybrid.xcodeproj 2>&1 | tail -30
+          ls -la ../PlantsVsZombiesHybrid.xcodeproj/
 
       - name: Build unsigned IPA
         run: |
-          echo "Building IPA..."
+          cd PlantsVsZombiesHybrid.xcodeproj
+          
+          # Build without signing
+          xcodebuild -project PlantsVsZombiesHybrid.xcodeproj \
+            -scheme "PlantsVsZombies Hybrid" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath ../build/PlantsVsZombiesHybrid.xcarchive \
+            archive \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tail -30
+          
+          # Export IPA
+          cd ..
+          mkdir -p build/ipa
+          
+          xcodebuild -exportArchive \
+            -archivePath build/PlantsVsZombiesHybrid.xcarchive \
+            -exportPath build/ipa \
+            -exportOptionsPlist - << 'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>method</key>
+  <string>development</string>
+  <key>teamID</key>
+  <string></string>
+  <key>uploadBitcode</key>
+  <false/>
+  <key>compileBitcode</key>
+  <false/>
+</dict>
+</plist>
+PLIST
+          
+          # Find IPA
+          IPA=$(find build/ipa -name "*.ipa" | head -1)
+          if [ -z "$IPA" ]; then
+            echo "ERROR: No IPA found"
+            exit 1
+          fi
+          echo "IPA: $IPA"
+          ls -la "$IPA"
+          cp "$IPA" pvz-hybrid-0.25.5.ipa
 
-      - name: Upload IPA artifact
+      - name: Upload IPA to Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload v0.25.5 pvz-hybrid-0.25.5.ipa --clobber
+          echo "IPA uploaded to release v0.25.5"
+
+      - name: Upload IPA artifact (backup)
         uses: actions/upload-artifact@v4
         with:
           name: pvz-hybrid-ipa
-          path: '*.ipa'
+          path: pvz-hybrid-0.25.5.ipa
