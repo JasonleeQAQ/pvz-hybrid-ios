@@ -171,8 +171,73 @@ jobs:
       - name: Export Xcode project
         run: |
           cd recovered
-          godot --headless --export-release "iOS" ../PlantsVsZombiesHybrid.xcodeproj 2>&1 | tail -20
-          ls ../PlantsVsZombiesHybrid.xcodeproj/
+          godot --headless --export-release "iOS" ../PlantsVsZombiesHybrid.xcodeproj 2>&1 | tail -30
+          ls ../PlantsVsZombiesHybrid.xcodeproj/ 2>/dev/null || ls ../ | grep xcodeproj
+          # Detect scheme from pbxproj (default scheme = project name)
+          SCHEME=$(python3 -c "
+          import re
+          with open('../PlantsVsZombiesHybrid.xcodeproj/project.pbxproj') as f:
+              content = f.read()
+          # Try to get target name from PBXNativeTarget section
+          m = re.search(r'PBXNativeTarget.*?\{.*?name = ([^;]+);', content, re.DOTALL)
+          if m:
+              print(m.group(1).strip())
+          else:
+              print('PlantsVsZombiesHybrid')
+          ")
+          echo "SCHEME=$SCHEME" >> $GITHUB_ENV
+          echo "Detected scheme: $SCHEME"
+
+      - name: Patch project.godot for iPad fullscreen (stretch=expand)
+        run: |
+          # Insert stretch settings into project.godot to eliminate black bars on 4:3 iPad
+          # Uses 'expand' aspect (ignore removed in 4.7) — viewport matches screen aspect, no letterbox
+          GODOT_FILE="recovered/project.godot"
+          if [ -f "$GODOT_FILE" ]; then
+            if grep -q '^\[display\]' "$GODOT_FILE"; then
+              echo "[display] section exists"
+            else
+              echo "" >> "$GODOT_FILE"
+              echo "[display]" >> "$GODOT_FILE"
+            fi
+            # Remove any existing stretch settings to avoid duplicates
+            sed -i '' '/^window\/stretch\/mode/d' "$GODOT_FILE"
+            sed -i '' '/^window\/stretch\/aspect/d' "$GODOT_FILE"
+            sed -i '' '/^window\/stretch\/scale/d' "$GODOT_FILE"
+            sed -i '' '/^window\/size\/viewport_width/d' "$GODOT_FILE"
+            sed -i '' '/^window\/size\/viewport_height/d' "$GODOT_FILE"
+            sed -i '' '/^window\/size\/window_width_override/d' "$GODOT_FILE"
+            sed -i '' '/^window\/size\/window_height_override/d' "$GODOT_FILE"
+            # Insert stretch config right after [display] line
+            sed -i '' '/^\[display\]/a\
+window/stretch/mode="canvas_items"\
+window/stretch/aspect="expand"\
+window/stretch/scale="1.0"\
+window/size/viewport_width=2388\
+window/size/viewport_height=1668\
+window/size/window_width_override=2388\
+window/size/window_height_override=1668' "$GODOT_FILE"
+            echo "=== Patched [display] section ==="
+            grep -A 10 '^\[display\]' "$GODOT_FILE" | head -15
+          else
+            echo "WARNING: project.godot not found at $GODOT_FILE"
+            ls recovered/ | head -10
+          fi
+
+      - name: Fix signing conflict in project.pbxproj
+        run: |
+          cd PlantsVsZombiesHybrid.xcodeproj
+          sed -i '' 's/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g' project.pbxproj
+          sed -i '' '/CODE_SIGN_IDENTITY = "Apple Distribution"/d' project.pbxproj
+          sed -i '' '/CODE_SIGN_IDENTITY = "iPhone Distribution"/d' project.pbxproj
+          sed -i '' 's/CODE_SIGNING_REQUIRED = YES/CODE_SIGNING_REQUIRED = NO/g' project.pbxproj
+          sed -i '' 's/CODE_SIGNING_ALLOWED = YES/CODE_SIGNING_ALLOWED = NO/g' project.pbxproj
+          if ! grep -q 'CODE_SIGN_IDENTITY = ""' project.pbxproj; then
+            sed -i '' '/CODE_SIGNING_ALLOWED = NO/a\				CODE_SIGN_IDENTITY = "";\
+' project.pbxproj
+          fi
+          echo "=== Fixed signing settings ==="
+          grep -E "CODE_SIGN" project.pbxproj | head -20
 
       - name: Fix signing conflict in project.pbxproj
         run: |
@@ -194,48 +259,41 @@ jobs:
       - name: Build unsigned IPA
         run: |
           cd PlantsVsZombiesHybrid.xcodeproj
+          SCHEME="${SCHEME:-${{ github.event.inputs.app_name }}}"
+          echo "Building with scheme: $SCHEME"
           xcodebuild -project PlantsVsZombiesHybrid.xcodeproj \
-            -scheme "${{ github.event.inputs.app_name }}" \
+            -scheme "$SCHEME" \
             -configuration Release \
-            -destination 'generic/platform=iOS' \
-            -archivePath ../build/PlantsVsZombiesHybrid.xcarchive \
-            archive \
+            -sdk iphoneos \
+            -derivedDataPath ../build \
+            build \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO 2>&1 | tail -20
-          cd ..
-          mkdir -p build/ipa
-          cat > build/export-options.plist << 'PLISTEOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>method</key>
-            <string>development</string>
-            <key>uploadBitcode</key>
-            <false/>
-            <key>compileBitcode</key>
-            <false/>
-          </dict>
-          </plist>
-          PLISTEOF
-          xcodebuild -exportArchive \
-            -archivePath build/PlantsVsZombiesHybrid.xcarchive \
-            -exportPath build/ipa \
-            -exportOptionsPlist build/export-options.plist \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO
-          IPA=$(find build/ipa -name "*.ipa" | head -1)
-          if [ -z "$IPA" ]; then
-            echo "ERROR: No IPA found"
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tail -40
+          # Find the built .app
+          APP_DIR="../build/Build/Products/Release-iphoneos"
+          APP=$(find "$APP_DIR" -maxdepth 1 -name "*.app" 2>/dev/null | head -1)
+          if [ -z "$APP" ]; then
+            echo "ERROR: .app not found in $APP_DIR"
+            find ../build -name "*.app" 2>/dev/null || echo "No .app found at all"
             exit 1
           fi
-          echo "IPA generated: $IPA"
-          ls -la "$IPA"
-          IPA_NAME="pvz-hybrid-${{ github.event.inputs.version }}.ipa"
-          cp "$IPA" "$IPA_NAME"
+          echo "APP found: $APP"
+          ls -la "$APP" | head -5
+          cd ..
+          # Package IPA (Payload/*.app → zip)
+          APP_BASENAME=$(basename "$APP")
+          rm -rf ipa
+          mkdir -p ipa/Payload
+          cp -R "$APP" "ipa/Payload/$APP_BASENAME"
+          IPA_NAME="pvz-hybrid.ipa"
+          (cd ipa && zip -qry "../$IPA_NAME" Payload)
+          if [ ! -f "$IPA_NAME" ]; then
+            echo "ERROR: IPA creation failed"
+            exit 1
+          fi
           echo "IPA_NAME=$IPA_NAME" >> $GITHUB_ENV
+          ls -la "$IPA_NAME"
 
       - name: Create Release and upload IPA
         env:
@@ -255,4 +313,4 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: pvz-hybrid-ipa
-          path: ${{ env.IPA_NAME }}
+          path: pvz-hybrid.ipa
