@@ -228,39 +228,22 @@ jobs:
       - name: Fix GDRE decompiled C# syntax issues
         run: |
           set -euo pipefail
-          echo "Fixing common GDRE decompilation syntax issues..."
-          # 修复 CS1525: Invalid expression term 'ref' - GDRE 有时会生成不合法的 ref 表达式
-          # 策略：搜索包含 'ref' 关键字但语法不合法的行，尝试修复
           cd recovered
-          find . -name "*.cs" -exec grep -l "ref" {} \; | while read f; do
-            # 用 python3 做精确修复
-            python3 -c "
-import re
-with open('$f', 'r') as fh:
-    content = fh.read()
-# 常见模式：GDRE 反编译把 'ref X' 放在不合法位置
-# 例如: SomeMethod(ref variable) 中的 ref 被放在表达式中间
-# 修复策略：如果一行包含 'ref' 且编译会报错，尝试注释掉该行
-# 更安全的做法：只修复已知有问题的模式
-lines = content.split('
-')
-fixed = False
-for i, line in enumerate(lines):
-    # 检查是否包含孤立的 'ref' 关键字在表达式中间
-    # 例如: return ref something; -> return something;
-    if re.search(r'return\s+ref', line):
-        lines[i] = line.replace('return ref ', 'return ')
-        fixed = True
-        print(f'  Fixed return ref in $f:{i+1}')
-if fixed:
-    with open('$f', 'w') as fh:
-        fh.write('
-'.join(lines))
-" 2>/dev/null || true
-          done
-          echo "Fix complete."
+          python3 ../.github/workflows/fix_gdre_syntax.py recovered
           cd ..
 
+      - name: Build C# with dotnet
+        id: dotnet-build
+        run: |
+          set -euo pipefail
+          cd recovered
+          CSPROJ=$(ls *.csproj | head -1)
+          echo "Building $CSPROJ with dotnet..."
+          dotnet restore "$CSPROJ" 2>&1
+          dotnet build "$CSPROJ" -c Release 2>&1
+          echo "=== Build output ==="
+          ls -la bin/Release/*/ 2>/dev/null || echo "No bin/Release output"
+          cd ..
       - name: Build C# with dotnet
         id: dotnet-build
         run: |
