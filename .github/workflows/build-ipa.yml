@@ -41,7 +41,11 @@ jobs:
 
       - name: Unzip project
         run: |
-          7z x source.zip -oextracted -y
+          ls -la source.zip
+          file source.zip
+          which 7z || echo "7z not in PATH"
+          ls /opt/homebrew/bin/7z* 2>/dev/null || ls /usr/local/bin/7z* 2>/dev/null || echo "7z not found in common locations"
+          7z x source.zip -oextracted -y 2>&1 | tail -20
           ls extracted/
 
       - name: Setup Java 17
