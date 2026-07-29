@@ -41,7 +41,7 @@ jobs:
 
       - name: Unzip project
         run: |
-          7zz x source.zip -oextracted -y
+          7z x source.zip -oextracted -y
           ls extracted/
 
       - name: Setup Java 17
