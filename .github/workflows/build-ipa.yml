@@ -23,6 +23,11 @@ on:
         required: false
         default: 'AAAAAAAAAA'
         type: string
+      force_recover:
+        description: 'Force GDRE recovery (disable cache)'
+        required: false
+        default: true
+        type: boolean
 
 jobs:
   build:
@@ -43,7 +48,7 @@ jobs:
 
       # ========== 阶段1：下载 + GDRE 恢复 ==========
       - name: Download ZIP from Release
-        if: steps.recover-stage.outputs.cache-hit != 'true'
+        if: steps.recover-stage.outputs.cache-hit != 'true' || inputs.force_recover
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -52,25 +57,25 @@ jobs:
           ls -la source.zip
 
       - name: Install 7-Zip (Deflate64 support)
-        if: steps.recover-stage.outputs.cache-hit != 'true'
+        if: steps.recover-stage.outputs.cache-hit != 'true' || inputs.force_recover
         run: |
           brew install p7zip
 
       - name: Unzip project
-        if: steps.recover-stage.outputs.cache-hit != 'true'
+        if: steps.recover-stage.outputs.cache-hit != 'true' || inputs.force_recover
         run: |
           7z x source.zip -oextracted -y
           ls extracted/
 
       - name: Setup Java 17
-        if: steps.recover-stage.outputs.cache-hit != 'true'
+        if: steps.recover-stage.outputs.cache-hit != 'true' || inputs.force_recover
         uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
 
       - name: Install GDRE
-        if: steps.recover-stage.outputs.cache-hit != 'true'
+        if: steps.recover-stage.outputs.cache-hit != 'true' || inputs.force_recover
         run: |
           curl -L -o gdre-macos.zip "https://github.com/GDRETools/gdsdecomp/releases/download/v2.6.0/GDRE_tools-v2.6.0-macos.zip"
           unzip -q gdre-macos.zip -d gdre_extracted
@@ -81,7 +86,7 @@ jobs:
 
       - name: Find and recover PCK
         id: recover
-        if: steps.recover-stage.outputs.cache-hit != 'true'
+        if: steps.recover-stage.outputs.cache-hit != 'true' || inputs.force_recover
         run: |
           PCK=$(find extracted -name "*.pck" | head -1)
           if [ -z "$PCK" ]; then
@@ -96,51 +101,67 @@ jobs:
 
       # ========== 强制保存阶段1缓存（不管后面构建成不成） ==========
       - name: 强制保存阶段1缓存
-        if: steps.recover-stage.outputs.cache-hit != 'true'
+        if: steps.recover-stage.outputs.cache-hit != 'true' || inputs.force_recover
         uses: actions/cache/save@v4
         with:
           path: recovered/
           key: gdre-recovery-${{ runner.os }}-${{ github.event.inputs.version }}
 
       - name: 保存阶段1产物（失败也保存）
-        if: always() && steps.recover-stage.outputs.cache-hit != 'true'
+        if: always() && (steps.recover-stage.outputs.cache-hit != 'true' || inputs.force_recover)
         uses: actions/upload-artifact@v5
         with:
           name: stage-recovered
           path: recovered/
           retention-days: 7
 
-      # ========== 阶段2：从 .csproj 探测版本 + 安装 Godot ==========
-      - name: Detect Godot and .NET versions from .csproj
+      # ========== 阶段2：探测版本 + 安装 Godot ==========
+      - name: Detect Godot and .NET versions
         id: detect
         run: |
-          CSPROJ="recovered/*.csproj"
-          CSPROJ_FILE=$(ls $CSPROJ 2>/dev/null | head -1)
-          if [ -z "$CSPROJ_FILE" ]; then
-            echo "ERROR: No .csproj found in recovered/"
-            exit 1
+          set -euo pipefail
+          CSPROJ_FILE=$(ls recovered/*.csproj 2>/dev/null | head -1)
+          GLOBAL_JSON="recovered/global.json"
+
+          # 优先从 global.json 读 .NET 版本
+          DOTNET_VER=""
+          if [ -f "$GLOBAL_JSON" ]; then
+            DOTNET_VER=$(python3 -c "
+import json
+with open('$GLOBAL_JSON') as f:
+    d = json.load(f)
+v = d.get('sdk', {}).get('version', '')
+if v:
+    parts = v.split('.')
+    print(f'{parts[0]}.{parts[1]}')
+" 2>/dev/null || true)
           fi
-          echo "Found csproj: $CSPROJ_FILE"
-          
-          # 提取 Godot SDK 版本 (e.g. Godot.NET.Sdk/4.7.0)
-          GODOT_SDK=$(grep -oP 'Godot\.NET\.Sdk/\K[0-9]+\.[0-9]+\.[0-9]+' "$CSPROJ_FILE" | head -1)
-          if [ -z "$GODOT_SDK" ]; then
-            GODOT_SDK=$(grep -oP 'Godot\.NET\.Sdk/\K[0-9]+\.[0-9]+' "$CSPROJ_FILE" | head -1)
+
+          # 从 .csproj 读 Godot SDK 版本和 TargetFramework
+          GODOT_SDK=""
+          TF=""
+          if [ -n "$CSPROJ_FILE" ]; then
+            GODOT_SDK=$(grep -oP 'Godot\.NET\.Sdk/\K[0-9]+\.[0-9]+\.[0-9]+' "$CSPROJ_FILE" | head -1)
+            if [ -z "$GODOT_SDK" ]; then
+              GODOT_SDK=$(grep -oP 'Godot\.NET\.Sdk/\K[0-9]+\.[0-9]+' "$CSPROJ_FILE" | head -1)
+            fi
+            TF=$(grep -oP '<TargetFramework>\Knet[0-9]+' "$CSPROJ_FILE" | head -1)
           fi
-          echo "Detected Godot SDK version: $GODOT_SDK"
-          
-          # 提取 TargetFramework (e.g. net90 -> 9.0)
-          TF=$(grep -oP '<TargetFramework>\Knet[0-9]+' "$CSPROJ_FILE" | head -1)
-          DOTNET_VER="${TF#net}"
-          DOTNET_VER="${DOTNET_VER:0:1}.${DOTNET_VER:1}"
-          echo "Detected .NET version: $DOTNET_VER"
-          
-          # 构建 Godot 下载版本号 (4.7.0-stable)
-          GODOT_STABLE="${GODOT_SDK}-stable"
+
+          # .NET 版本：global.json > csproj > 默认 8.0
+          if [ -z "$DOTNET_VER" ] && [ -n "$TF" ]; then
+            TF_NUM="${TF#net}"
+            DOTNET_VER="${TF_NUM:0:1}.${TF_NUM:1}"
+          fi
+          DOTNET_VER="${DOTNET_VER:-8.0}"
+
+          # Godot 版本：csproj > 默认 4.7.0
+          GODOT_STABLE="${GODOT_SDK:-4.7.0}-stable"
+
           echo "godot_version=$GODOT_STABLE" >> $GITHUB_OUTPUT
           echo "dotnet_version=$DOTNET_VER" >> $GITHUB_OUTPUT
-          echo "godot_cache_key=godot-${GODOT_STABLE}-dotnet-macos" >> $GITHUB_OUTPUT
-          echo "Godot version: $GODOT_STABLE, .NET: $DOTNET_VER"
+          echo "godot_cache_key=godot-${GODOT_STABLE}-${runner.os}" >> $GITHUB_OUTPUT
+          echo "Godot: $GODOT_STABLE, .NET: $DOTNET_VER"
 
       - name: Generate export_presets.cfg
         run: |
@@ -212,7 +233,7 @@ jobs:
           GENEOF
           python3 generate_presets.py "${{ github.event.inputs.app_name }}" "${{ github.event.inputs.bundle_id }}" "${{ github.event.inputs.version }}" "${{ github.event.inputs.team_id }}"
 
-      - name: Setup .NET SDK (detected version)
+      - name: Setup .NET SDK
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '${{ steps.detect.outputs.dotnet_version }}.x'
@@ -222,18 +243,7 @@ jobs:
           dotnet workload install ios
           echo ".NET iOS workload installed successfully."
 
-      - name: Restore NuGet packages and build C# project
-        run: |
-          cd recovered
-          CSPROJ=$(ls *.csproj | head -1)
-          echo "Building C# project: $CSPROJ"
-          dotnet restore "$CSPROJ" 2>&1 | tail -20
-          dotnet build "$CSPROJ" -c Release 2>&1 | tail -30
-          echo "=== Build output ==="
-          ls -la bin/Release/*/ 2>/dev/null || echo "No bin/Release output"
-          cd ..
-
-      - name: Install Godot (detected version)
+      - name: Install Godot
         id: godot-cache
         uses: actions/cache/restore@v4
         with:
@@ -243,6 +253,7 @@ jobs:
       - name: Download and install Godot
         if: steps.godot-cache.outputs.cache-hit != 'true'
         run: |
+          set -euo pipefail
           GODOT_VER="${{ steps.detect.outputs.godot_version }}"
           echo "Downloading Godot $GODOT_VER Mono"
           curl -L -o godot.zip "https://github.com/godotengine/godot-builds/releases/download/${GODOT_VER}/Godot_v${GODOT_VER}_mono_macos.universal.zip"
@@ -273,8 +284,9 @@ jobs:
             exit 1
           fi
 
-      - name: Install iOS export templates (detected version)
+      - name: Install iOS export templates
         run: |
+          set -euo pipefail
           GODOT_VER="${{ steps.detect.outputs.godot_version }}"
           echo "Downloading export templates for Godot $GODOT_VER"
           curl -L -o templates.tpz "https://github.com/godotengine/godot-builds/releases/download/${GODOT_VER}/Godot_v${GODOT_VER}_mono_export_templates.tpz"
@@ -285,17 +297,34 @@ jobs:
           echo "Templates installed"
           ls "$TEMPLATES_DIR/"
 
-      - name: Build C# solutions with Godot
+      # ========== Godot Mono 构建流程：build-solutions → export ==========
+      - name: Build C# solutions (godot --build-solutions)
+        id: build-solutions
+        continue-on-error: true
         run: |
+          set -euo pipefail
           cd recovered
-          # godot --build-solutions 会调用 dotnet build 并生成 .godot/mono/ 目录
-          godot --headless --build-solutions 2>&1 | tail -30 || true
+          godot --headless --build-solutions 2>&1 | tail -50
           echo "=== .godot/mono/ ==="
           ls -la .godot/mono/ 2>/dev/null || echo "No .godot/mono/ generated"
           cd ..
 
+      - name: Fallback to dotnet build if godot --build-solutions failed
+        if: steps.build-solutions.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          echo "godot --build-solutions failed, falling back to dotnet build"
+          cd recovered
+          CSPROJ=$(ls *.csproj | head -1)
+          dotnet restore "$CSPROJ" 2>&1 | tail -20
+          dotnet build "$CSPROJ" -c Release 2>&1 | tail -30
+          echo "=== Build output ==="
+          ls -la bin/Release/*/ 2>/dev/null || echo "No bin/Release output"
+          cd ..
+
       - name: Export Xcode project
         run: |
+          set -euo pipefail
           cd recovered
           godot --headless --export-release "iOS" ../PlantsVsZombiesHybrid.xcodeproj 2>&1 | tail -30 || true
           cd ..
@@ -393,8 +422,9 @@ jobs:
           path: PlantsVsZombiesHybrid.xcodeproj/
           retention-days: 7
 
-      # ========== 阶段3：构建 IPA ==========
+      # ========== 阶段3：构建 IPA + 完整性验证 ==========
       - name: Build unsigned IPA
+        id: build-ipa
         run: |
           set -o pipefail
           SCHEME="${SCHEME//\"}"
@@ -426,6 +456,59 @@ jobs:
           fi
           echo "APP found: $APP"
           ls -la "$APP" | head -5
+
+          # ========== 完整性验证：检查 C# 运行时 ==========
+          echo "=== Integrity check: C# runtime ==="
+          HAS_FRAMEWORKS=false
+          HAS_DLL=false
+          HAS_AOTDATA=false
+          HAS_GODOTSHARP=false
+
+          if [ -d "$APP/Frameworks" ]; then
+            HAS_FRAMEWORKS=true
+            echo "  [PASS] Frameworks/ exists"
+            ls "$APP/Frameworks/"
+          else
+            echo "  [FAIL] No Frameworks/ directory"
+          fi
+
+          DLL_COUNT=$(find "$APP" -name "*.dll" 2>/dev/null | wc -l)
+          if [ "$DLL_COUNT" -gt 0 ]; then
+            HAS_DLL=true
+            echo "  [PASS] Found $DLL_COUNT .dll files"
+            find "$APP" -name "*.dll" | head -5
+          else
+            echo "  [FAIL] No .dll files found"
+          fi
+
+          AOT_COUNT=$(find "$APP" -name "*.aotdata" 2>/dev/null | wc -l)
+          if [ "$AOT_COUNT" -gt 0 ]; then
+            HAS_AOTDATA=true
+            echo "  [PASS] Found $AOT_COUNT .aotdata files"
+          else
+            echo "  [WARN] No .aotdata files (may be OK for non-AOT builds)"
+          fi
+
+          GS_COUNT=$(find "$APP" -name "*GodotSharp*" 2>/dev/null | wc -l)
+          if [ "$GS_COUNT" -gt 0 ]; then
+            HAS_GODOTSHARP=true
+            echo "  [PASS] Found GodotSharp references"
+          else
+            echo "  [FAIL] No GodotSharp found"
+          fi
+
+          # 关键检查：必须有 Frameworks 或 .dll（Godot Mono 导出必须二者之一）
+          if [ "$HAS_FRAMEWORKS" = false ] && [ "$HAS_DLL" = false ]; then
+            echo ""
+            echo "============================================"
+            echo "INTEGRITY CHECK FAILED: No C# runtime found!"
+            echo "Neither Frameworks/ nor .dll files exist."
+            echo "This IPA will crash on launch."
+            echo "============================================"
+            exit 1
+          fi
+          echo ""
+          echo "=== Integrity check PASSED ==="
 
           APP_BASENAME=$(basename "$APP")
           rm -rf ipa
