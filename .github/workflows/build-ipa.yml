@@ -26,7 +26,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-26
+    runs-on: macos-15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -138,7 +138,7 @@ jobs:
               'custom_features=""',
               'export_filter="all_resources"',
               'include_filter=""',
-              'exclude_filter="*.cs"',
+              'exclude_filter=""',
               'export_path="../PlantsVsZombiesHybrid.xcodeproj"',
               'encryption_include_filters=""',
               'encryption_exclude_filters=""',
@@ -187,6 +187,12 @@ jobs:
           print("export_presets.cfg generated")
           GENEOF
           python3 generate_presets.py "${{ github.event.inputs.app_name }}" "${{ github.event.inputs.bundle_id }}" "${{ github.event.inputs.version }}" "${{ github.event.inputs.team_id }}"
+
+      # 【修复】安装 .NET SDK 8.0 用于 Godot C# NativeAOT 编译
+      - name: Setup .NET SDK for AOT compilation
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
 
       - name: Install Godot 4.7.1 .NET
         if: steps.godot-cache.outputs.cache-hit != 'true'
