@@ -26,7 +26,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -317,7 +317,7 @@ jobs:
           
           echo "Fixed project.pbxproj signing settings"
           grep -E "CODE_SIGN" project.pbxproj | head -20
-      - name: Fix missing framework links (Metal/QuartzCore)
+      - name: Fix missing framework links (Metal/QuartzCore/CoreAudio)
         run: |
           cd PlantsVsZombiesHybrid.xcodeproj
           cat > fix_frameworks.py << 'FIXEOF'
@@ -367,6 +367,7 @@ FIXEOF
           echo "=== Verify frameworks in pbxproj ==="
           grep -c "Metal.framework" project.pbxproj
           grep -c "QuartzCore.framework" project.pbxproj
+          grep -c "CoreAudio.framework" project.pbxproj
 
       - name: 保存阶段2产物（失败也保存）
         if: always()
