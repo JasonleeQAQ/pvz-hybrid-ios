@@ -35,16 +35,16 @@ jobs:
       - name: 恢复阶段1-GDRE恢复产物
         id: recover-stage
         continue-on-error: true
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: recovered/
-          key: gdre-recovery-${{ runner.os }}-${{ hashFiles('source.zip') }}
+          key: gdre-recovery-${{ runner.os }}-${{ github.event.inputs.version }}
           restore-keys: |
             gdre-recovery-${{ runner.os }}-
 
       - name: 恢复阶段2-Godot安装
         id: godot-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: $HOME/Godot.app
           key: godot-4.7.1-dotnet-macos
@@ -104,7 +104,7 @@ jobs:
 
       - name: 保存阶段1产物（失败也保存）
         if: always() && steps.recover-stage.outputs.cache-hit != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: stage-recovered
           path: recovered/
@@ -300,7 +300,7 @@ jobs:
 
       - name: 保存阶段2产物（失败也保存）
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: stage-xcodeproj
           path: PlantsVsZombiesHybrid.xcodeproj/
@@ -351,7 +351,7 @@ jobs:
 
       - name: 保存阶段3产物（失败也保存）
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: stage-ipa
           path: pvz-hybrid.ipa
