@@ -214,7 +214,7 @@ jobs:
 
       - name: Create Release and upload IPA
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.PAT }}
         run: |
           RELEASE_TAG="v${{ github.event.inputs.version }}"
           if gh release view "$RELEASE_TAG" &>/dev/null; then
