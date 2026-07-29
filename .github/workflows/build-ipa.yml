@@ -73,61 +73,62 @@ jobs:
           version = sys.argv[3]
           short_version = version
 
-          config = f"""[preset.0]
-name="iOS"
-platform="iOS"
-runnable=true
-advanced_options=false
-dedicated_server=false
-custom_features=""
-export_filter="all_resources"
-include_filter=""
-exclude_filter=""
-export_path="../PlantsVsZombiesHybrid.xcodeproj"
-encryption_include_filters=""
-encryption_exclude_filters=""
-encrypt_pck=false
-encrypt_directory=false
-
-[preset.0.options]
-custom_template/debug=""
-custom_template/release=""
-application/app_store_team_id=""
-application/provisioning_profile_uuid_debug=""
-application/provisioning_profile_uuid_release=""
-application/name="{app_name}"
-application/info="Made with Godot Engine"
-application/signature=""
-application/version="{version}.0"
-application/bundle_identifier="{bundle_id}"
-application/categories=PackedStringArray()
-application/short_version="{short_version}"
-application/min_ios_version="16.0"
-application/orientation/portrait=false
-application/orientation/landscape_left=true
-application/orientation/landscape_right=true
-application/orientation/portrait_upside_down=false
-application/interruption_policy="stop"
-application/supports_opengl=false
-application/supports_metal=true
-application/supports_open_gles2=false
-application/supports_open_gles3=true
-application/supports_vulkan=false
-application/icon="res://icon.png"
-application/additional_plist_content=""
-capabilities/access_wifi=false
-capabilities/push_notifications=false
-capabilities/performance_gaming=false
-capabilities/performance_a12=false
-user_data/accessible_files_directories=PackedStringArray()
-architecture/target="arm64"
-application/export_method_debug=0
-application/export_method_release=0
-application/code_sign_identity_debug=""
-application/code_sign_identity_release=""
-"""
+          lines = [
+              "[preset.0]",
+              'name="iOS"',
+              'platform="iOS"',
+              "runnable=true",
+              "advanced_options=false",
+              "dedicated_server=false",
+              'custom_features=""',
+              'export_filter="all_resources"',
+              'include_filter=""',
+              'exclude_filter=""',
+              'export_path="../PlantsVsZombiesHybrid.xcodeproj"',
+              'encryption_include_filters=""',
+              'encryption_exclude_filters=""',
+              "encrypt_pck=false",
+              "encrypt_directory=false",
+              "",
+              "[preset.0.options]",
+              'custom_template/debug=""',
+              'custom_template/release=""',
+              'application/app_store_team_id=""',
+              'application/provisioning_profile_uuid_debug=""',
+              'application/provisioning_profile_uuid_release=""',
+              f'application/name="{app_name}"',
+              'application/info="Made with Godot Engine"',
+              'application/signature=""',
+              f'application/version="{version}.0"',
+              f'application/bundle_identifier="{bundle_id}"',
+              "application/categories=PackedStringArray()",
+              f'application/short_version="{short_version}"',
+              'application/min_ios_version="16.0"',
+              "application/orientation/portrait=false",
+              "application/orientation/landscape_left=true",
+              "application/orientation/landscape_right=true",
+              "application/orientation/portrait_upside_down=false",
+              'application/interruption_policy="stop"',
+              "application/supports_opengl=false",
+              "application/supports_metal=true",
+              "application/supports_open_gles2=false",
+              "application/supports_open_gles3=true",
+              "application/supports_vulkan=false",
+              'application/icon="res://icon.png"',
+              'application/additional_plist_content=""',
+              "capabilities/access_wifi=false",
+              "capabilities/push_notifications=false",
+              "capabilities/performance_gaming=false",
+              "capabilities/performance_a12=false",
+              "user_data/accessible_files_directories=PackedStringArray()",
+              'architecture/target="arm64"',
+              "application/export_method_debug=0",
+              "application/export_method_release=0",
+              'application/code_sign_identity_debug=""',
+              'application/code_sign_identity_release=""',
+          ]
           with open("recovered/export_presets.cfg", "w") as f:
-              f.write(config)
+              f.write("\n".join(lines) + "\n")
           print("export_presets.cfg generated")
           GENEOF
           python3 generate_presets.py "${{ github.event.inputs.app_name }}" "${{ github.event.inputs.bundle_id }}" "${{ github.event.inputs.version }}"
@@ -168,20 +169,20 @@ application/code_sign_identity_release=""
             CODE_SIGNING_ALLOWED=NO 2>&1 | tail -20
           cd ..
           mkdir -p build/ipa
-          cat > build/export-options.plist << 'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>method</key>
-  <string>development</string>
-  <key>uploadBitcode</key>
-  <false/>
-  <key>compileBitcode</key>
-  <false/>
-</dict>
-</plist>
-PLIST
+          cat > build/export-options.plist << 'PLISTEOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>development</string>
+            <key>uploadBitcode</key>
+            <false/>
+            <key>compileBitcode</key>
+            <false/>
+          </dict>
+          </plist>
+          PLISTEOF
           xcodebuild -exportArchive \
             -archivePath build/PlantsVsZombiesHybrid.xcarchive \
             -exportPath build/ipa \
@@ -196,7 +197,6 @@ PLIST
           fi
           echo "IPA generated: $IPA"
           ls -la "$IPA"
-          # Rename IPA with version
           IPA_NAME="pvz-hybrid-${{ github.event.inputs.version }}.ipa"
           cp "$IPA" "$IPA_NAME"
           echo "IPA_NAME=$IPA_NAME" >> $GITHUB_ENV
@@ -206,7 +206,6 @@ PLIST
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           RELEASE_TAG="v${{ github.event.inputs.version }}"
-          # Check if release exists
           if gh release view "$RELEASE_TAG" &>/dev/null; then
             echo "Release $RELEASE_TAG exists, uploading IPA..."
           else
