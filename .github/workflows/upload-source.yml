@@ -28,7 +28,7 @@ jobs:
 
       - name: Create Release and upload ZIP
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.PAT }}
         run: |
           RELEASE_TAG="v${{ github.event.inputs.version }}"
           # Create release if it doesn't exist
