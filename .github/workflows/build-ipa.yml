@@ -41,13 +41,6 @@ jobs:
           restore-keys: |
             gdre-recovery-${{ runner.os }}-
 
-      - name: 拉取阶段2-Godot安装
-        id: godot-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: /Users/runner/Godot.app
-          key: godot-4.7.1-dotnet-macos
-
       # ========== 阶段1：下载 + GDRE 恢复 ==========
       - name: Download ZIP from Release
         if: steps.recover-stage.outputs.cache-hit != 'true'
@@ -117,7 +110,38 @@ jobs:
           path: recovered/
           retention-days: 7
 
-      # ========== 阶段2：Godot 安装 + 导出 ==========
+      # ========== 阶段2：从 .csproj 探测版本 + 安装 Godot ==========
+      - name: Detect Godot and .NET versions from .csproj
+        id: detect
+        run: |
+          CSPROJ="recovered/*.csproj"
+          CSPROJ_FILE=$(ls $CSPROJ 2>/dev/null | head -1)
+          if [ -z "$CSPROJ_FILE" ]; then
+            echo "ERROR: No .csproj found in recovered/"
+            exit 1
+          fi
+          echo "Found csproj: $CSPROJ_FILE"
+          
+          # 提取 Godot SDK 版本 (e.g. Godot.NET.Sdk/4.7.0)
+          GODOT_SDK=$(grep -oP 'Godot\.NET\.Sdk/\K[0-9]+\.[0-9]+\.[0-9]+' "$CSPROJ_FILE" | head -1)
+          if [ -z "$GODOT_SDK" ]; then
+            GODOT_SDK=$(grep -oP 'Godot\.NET\.Sdk/\K[0-9]+\.[0-9]+' "$CSPROJ_FILE" | head -1)
+          fi
+          echo "Detected Godot SDK version: $GODOT_SDK"
+          
+          # 提取 TargetFramework (e.g. net90 -> 9.0)
+          TF=$(grep -oP '<TargetFramework>\Knet[0-9]+' "$CSPROJ_FILE" | head -1)
+          DOTNET_VER="${TF#net}"
+          DOTNET_VER="${DOTNET_VER:0:1}.${DOTNET_VER:1}"
+          echo "Detected .NET version: $DOTNET_VER"
+          
+          # 构建 Godot 下载版本号 (4.7.0-stable)
+          GODOT_STABLE="${GODOT_SDK}-stable"
+          echo "godot_version=$GODOT_STABLE" >> $GITHUB_OUTPUT
+          echo "dotnet_version=$DOTNET_VER" >> $GITHUB_OUTPUT
+          echo "godot_cache_key=godot-${GODOT_STABLE}-dotnet-macos" >> $GITHUB_OUTPUT
+          echo "Godot version: $GODOT_STABLE, .NET: $DOTNET_VER"
+
       - name: Generate export_presets.cfg
         run: |
           cat > generate_presets.py << 'GENEOF'
@@ -138,7 +162,7 @@ jobs:
               'custom_features=""',
               'export_filter="all_resources"',
               'include_filter=""',
-              'exclude_filter=""', # 【修复】绝不排除 C# 文件
+              'exclude_filter=""',
               'export_path="../PlantsVsZombiesHybrid.xcodeproj"',
               'encryption_include_filters=""',
               'encryption_exclude_filters=""',
@@ -188,35 +212,52 @@ jobs:
           GENEOF
           python3 generate_presets.py "${{ github.event.inputs.app_name }}" "${{ github.event.inputs.bundle_id }}" "${{ github.event.inputs.version }}" "${{ github.event.inputs.team_id }}"
 
-      # 【修复】增加 .NET 8 SDK 安装步骤
-      - name: Setup .NET SDK for AOT compilation
+      - name: Setup .NET SDK (detected version)
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x' 
+          dotnet-version: '${{ steps.detect.outputs.dotnet_version }}.x'
 
-      # 【修复】安装 iOS workload，否则 AOT 编译 C# 静态库依然会失败
       - name: Install .NET iOS Workload
         run: |
           dotnet workload install ios
           echo ".NET iOS workload installed successfully."
 
-      - name: Install Godot 4.7.1 .NET
+      - name: Restore NuGet packages and build C# project
+        run: |
+          cd recovered
+          CSPROJ=$(ls *.csproj | head -1)
+          echo "Building C# project: $CSPROJ"
+          dotnet restore "$CSPROJ" 2>&1 | tail -20
+          dotnet build "$CSPROJ" -c Release 2>&1 | tail -30
+          echo "=== Build output ==="
+          ls -la bin/Release/*/ 2>/dev/null || echo "No bin/Release output"
+          cd ..
+
+      - name: Install Godot (detected version)
+        id: godot-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: /Users/runner/Godot.app
+          key: ${{ steps.detect.outputs.godot_cache_key }}
+
+      - name: Download and install Godot
         if: steps.godot-cache.outputs.cache-hit != 'true'
         run: |
-          curl -L -o godot.zip "https://github.com/godotengine/godot-builds/releases/download/4.7.1-stable/Godot_v4.7.1-stable_mono_macos.universal.zip"
+          GODOT_VER="${{ steps.detect.outputs.godot_version }}"
+          echo "Downloading Godot $GODOT_VER Mono"
+          curl -L -o godot.zip "https://github.com/godotengine/godot-builds/releases/download/${GODOT_VER}/Godot_v${GODOT_VER}_mono_macos.universal.zip"
           unzip -q godot.zip -d godot_extracted
           mv godot_extracted/Godot_mono.app $HOME/Godot.app
           GODOT="$HOME/Godot.app/Contents/MacOS"
           echo "$GODOT" >> $GITHUB_PATH
           "$GODOT/Godot" --version
 
-      # ========== 强制保存 Godot 缓存（不管后面构建成不成） ==========
       - name: 强制保存 Godot 缓存
         if: steps.godot-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: /Users/runner/Godot.app
-          key: godot-4.7.1-dotnet-macos
+          key: ${{ steps.detect.outputs.godot_cache_key }}
 
       - name: 确保 Godot 在 PATH 中
         if: steps.godot-cache.outputs.cache-hit == 'true'
@@ -232,15 +273,26 @@ jobs:
             exit 1
           fi
 
-      - name: Install iOS export templates
+      - name: Install iOS export templates (detected version)
         run: |
-          curl -L -o templates.tpz "https://github.com/godotengine/godot-builds/releases/download/4.7.1-stable/Godot_v4.7.1-stable_mono_export_templates.tpz"
-          TEMPLATES_DIR="$HOME/Library/Application Support/Godot/export_templates/4.7.1.stable.mono"
+          GODOT_VER="${{ steps.detect.outputs.godot_version }}"
+          echo "Downloading export templates for Godot $GODOT_VER"
+          curl -L -o templates.tpz "https://github.com/godotengine/godot-builds/releases/download/${GODOT_VER}/Godot_v${GODOT_VER}_mono_export_templates.tpz"
+          TEMPLATES_DIR="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VER}.mono"
           mkdir -p "$TEMPLATES_DIR"
           unzip -q templates.tpz -d /tmp/templates_extract
           cp -r /tmp/templates_extract/templates/* "$TEMPLATES_DIR/"
           echo "Templates installed"
           ls "$TEMPLATES_DIR/"
+
+      - name: Build C# solutions with Godot
+        run: |
+          cd recovered
+          # godot --build-solutions 会调用 dotnet build 并生成 .godot/mono/ 目录
+          godot --headless --build-solutions 2>&1 | tail -30 || true
+          echo "=== .godot/mono/ ==="
+          ls -la .godot/mono/ 2>/dev/null || echo "No .godot/mono/ generated"
+          cd ..
 
       - name: Export Xcode project
         run: |
@@ -323,7 +375,7 @@ jobs:
           sed -i '' 's/CODE_SIGNING_ALLOWED = "YES";/CODE_SIGNING_ALLOWED = NO;/g' project.pbxproj
           echo "Fixed project.pbxproj signing settings"
           grep -E "CODE_SIGN" project.pbxproj | head -20
-          
+
       - name: Fix missing framework links (Metal/QuartzCore/CoreAudio)
         run: |
           cd PlantsVsZombiesHybrid.xcodeproj
@@ -349,7 +401,7 @@ jobs:
           SCHEME="${SCHEME:-${{ github.event.inputs.app_name }}}"
           echo "Building with scheme: $SCHEME"
           xcodebuild -project PlantsVsZombiesHybrid.xcodeproj -list 2>&1 | head -20
-          
+
           xcodebuild -project PlantsVsZombiesHybrid.xcodeproj \
             -scheme "$SCHEME" \
             -configuration Release \
@@ -364,7 +416,7 @@ jobs:
             echo "ERROR: xcodebuild failed with exit code $XCODE_EXIT"
             exit "$XCODE_EXIT"
           fi
-            
+
           APP_DIR="build/Build/Products/Release-iphoneos"
           APP=$(find "$APP_DIR" -maxdepth 1 -name "*.app" 2>/dev/null | head -1)
           if [ -z "$APP" ]; then
@@ -374,7 +426,7 @@ jobs:
           fi
           echo "APP found: $APP"
           ls -la "$APP" | head -5
-          
+
           APP_BASENAME=$(basename "$APP")
           rm -rf ipa
           mkdir -p ipa/Payload
