@@ -206,6 +206,21 @@ jobs:
           path: /Users/runner/Godot.app
           key: godot-4.7.1-dotnet-macos
 
+      # 【修复】缓存命中时 Install Godot 步骤被跳过，需手动确保 Godot 在 PATH 中
+      - name: 确保 Godot 在 PATH 中
+        if: steps.godot-cache.outputs.cache-hit == 'true'
+        run: |
+          GODOT="$HOME/Godot.app/Contents/MacOS"
+          if [ -d "$GODOT" ]; then
+            echo "$GODOT" >> $GITHUB_PATH
+            "$GODOT/Godot" --version
+            echo "Godot restored from cache and added to PATH"
+          else
+            echo "ERROR: Godot.app not found at $HOME/Godot.app despite cache hit"
+            ls -la $HOME/ | head -10
+            exit 1
+          fi
+
       - name: Install iOS export templates
         run: |
           curl -L -o templates.tpz "https://github.com/godotengine/godot-builds/releases/download/4.7.1-stable/Godot_v4.7.1-stable_mono_export_templates.tpz"
