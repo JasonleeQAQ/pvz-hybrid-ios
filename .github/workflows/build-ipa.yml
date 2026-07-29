@@ -150,7 +150,7 @@ jobs:
 
           echo "godot_version=$GODOT_STABLE" >> $GITHUB_OUTPUT
           echo "dotnet_version=$DOTNET_VER" >> $GITHUB_OUTPUT
-          echo "godot_cache_key=godot-${GODOT_STABLE}-${runner.os}" >> $GITHUB_OUTPUT
+          echo "godot_cache_key=godot-${GODOT_STABLE}-${{ runner.os }}" >> $GITHUB_OUTPUT
           echo "Godot: $GODOT_STABLE, .NET: $DOTNET_VER"
 
       - name: Generate export_presets.cfg
