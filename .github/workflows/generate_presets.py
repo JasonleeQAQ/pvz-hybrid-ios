@@ -56,7 +56,5 @@ lines = [
     'application/code_sign_identity_release=""',
 ]
 with open("recovered/export_presets.cfg", "w") as f:
-    f.write("
-".join(lines) + "
-")
+    f.write("\n".join(lines) + "\n")
 print("export_presets.cfg generated")
