@@ -179,8 +179,10 @@ jobs:
         run: |
           set -euo pipefail
           GODOT_VER="${{ steps.detect.outputs.godot_version }}"
-          echo "Downloading Godot $GODOT_VER Mono"
-          curl -L -o godot.zip "https://godot-releases.nbg1.your-objectstorage.com/${GODOT_VER%.0-stable}-stable/Godot_v${GODOT_VER}_mono_macos.universal.zip"
+          # CDN 版本号去掉 .0（4.7.0-stable → 4.7-stable）
+          GODOT_VER_CDN="${GODOT_VER%.0-stable}-stable"
+          echo "Downloading Godot $GODOT_VER Mono (CDN: $GODOT_VER_CDN)"
+          curl -L -o godot.zip "https://godot-releases.nbg1.your-objectstorage.com/${GODOT_VER_CDN}/Godot_v${GODOT_VER_CDN}_mono_macos.universal.zip"
           unzip -q godot.zip -d godot_extracted
           mv godot_extracted/Godot_mono.app $HOME/Godot.app
           GODOT="$HOME/Godot.app/Contents/MacOS"
@@ -213,7 +215,8 @@ jobs:
           set -euo pipefail
           GODOT_VER="${{ steps.detect.outputs.godot_version }}"
           echo "Downloading export templates for Godot $GODOT_VER"
-          curl -L -o templates.tpz "https://godot-releases.nbg1.your-objectstorage.com/${GODOT_VER%.0-stable}-stable/Godot_v${GODOT_VER}_mono_export_templates.tpz"
+          GODOT_VER_CDN="${GODOT_VER%.0-stable}-stable"
+          curl -L -o templates.tpz "https://godot-releases.nbg1.your-objectstorage.com/${GODOT_VER_CDN}/Godot_v${GODOT_VER_CDN}_mono_export_templates.tpz"
           TEMPLATES_DIR="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VER}.mono"
           mkdir -p "$TEMPLATES_DIR"
           unzip -q templates.tpz -d /tmp/templates_extract
