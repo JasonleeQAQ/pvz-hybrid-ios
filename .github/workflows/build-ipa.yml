@@ -34,6 +34,19 @@ jobs:
         run: |
           curl -L -o source.zip "${{ github.event.inputs.source_url }}"
           ls -la source.zip
+          # Validate download is actually a ZIP, not an error page
+          FILE_TYPE=$(file -b source.zip)
+          echo "File type: $FILE_TYPE"
+          if echo "$FILE_TYPE" | grep -qi "html\|text"; then
+            echo "ERROR: Downloaded file is not a ZIP archive. Server returned:"
+            head -20 source.zip
+            exit 1
+          fi
+          if [ $(stat -f%z source.zip) -lt 1000 ]; then
+            echo "ERROR: Downloaded file is too small ($(<source.zip) bytes), likely an error page"
+            head -20 source.zip
+            exit 1
+          fi
 
       - name: Install 7-Zip (Deflate64 support)
         run: |
@@ -41,11 +54,7 @@ jobs:
 
       - name: Unzip project
         run: |
-          ls -la source.zip
-          file source.zip
-          which 7z || echo "7z not in PATH"
-          ls /opt/homebrew/bin/7z* 2>/dev/null || ls /usr/local/bin/7z* 2>/dev/null || echo "7z not found in common locations"
-          7z x source.zip -oextracted -y 2>&1 | tail -20
+          7z x source.zip -oextracted -y
           ls extracted/
 
       - name: Setup Java 17
