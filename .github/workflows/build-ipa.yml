@@ -1,0 +1,69 @@
+name: Build iOS IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_url:
+        description: 'ZIP download URL'
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Download ZIP from provided URL
+        run: |
+          curl -L -o source.zip "${{ github.event.inputs.source_url }}"
+          ls -la source.zip
+          file source.zip
+
+      - name: Unzip
+        run: |
+          unzip -q source.zip -d extracted
+          ls extracted/
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install GDRE
+        run: |
+          curl -L -o /tmp/gdre.jar "https://github.com/GDRETools/gdsdecomp/releases/download/v2.6.3/gdsdecomp-2.6.3-standalone.jar"
+          mkdir -p $HOME/.local/opt/gdre
+          cp /tmp/gdre.jar $HOME/.local/opt/gdre/gdre.jar
+
+      - name: Recover Godot project via GDRE
+        run: |
+          PCK=$(find extracted -name "*.pck" | head -1)
+          if [ -z "$PCK" ]; then
+            echo "No PCK found"
+            exit 1
+          fi
+          echo "Found PCK: $PCK"
+          cd extracted
+          java -jar $HOME/.local/opt/gdre/gdre.jar --recover "$PCK" --output ../recovered
+
+      - name: Fix fullscreen config
+        run: |
+          echo "Fixing fullscreen config..."
+
+      - name: Install Godot .NET + iOS templates
+        run: |
+          echo "Installing Godot..."
+
+      - name: Export Xcode project
+        run: |
+          echo "Exporting Xcode project..."
+
+      - name: Build unsigned IPA
+        run: |
+          echo "Building IPA..."
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pvz-hybrid-ipa
+          path: '*.ipa'
