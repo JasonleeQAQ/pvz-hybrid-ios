@@ -70,7 +70,7 @@ jobs:
           echo "Found PCK: $PCK"
           mkdir -p recovered
           GDRE_BIN="gdre_extracted/Godot RE Tools.app/Contents/MacOS/Godot RE Tools"
-          "$GDRE_BIN" --recover="$PCK" --output recovered/ 2>&1 | tail -20
+          "$GDRE_BIN" --recover="$PCK" --output=recovered/ 2>&1 | tail -20
           ls recovered/ | head -10
 
       - name: Generate export_presets.cfg
@@ -153,11 +153,14 @@ jobs:
 
       - name: Install iOS export templates
         run: |
-          curl -L -o templates.zip "https://github.com/godotengine/godot-builds/releases/download/4.7.1-stable/Godot_v4.7.1-stable_mono_ios.universal.zip"
+          curl -L -o templates.tpz "https://github.com/godotengine/godot-builds/releases/download/4.7.1-stable/Godot_v4.7.1-stable_mono_export_templates.tpz"
           TEMPLATES_DIR="$HOME/Library/Application Support/Godot/export_templates"
           mkdir -p "$TEMPLATES_DIR"
+          # .tpz is actually a zip file
+          mv templates.tpz templates.zip
           unzip -q templates.zip -d "$TEMPLATES_DIR"
           echo "Templates installed"
+          ls "$TEMPLATES_DIR/"
 
       - name: Export Xcode project
         run: |
