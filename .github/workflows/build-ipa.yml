@@ -209,14 +209,32 @@ jobs:
             sed -i '' '/^window\/size\/window_width_override/d' "$GODOT_FILE"
             sed -i '' '/^window\/size\/window_height_override/d' "$GODOT_FILE"
             # Insert stretch config right after [display] line
-            sed -i '' '/^\[display\]/a\
-window/stretch/mode="canvas_items"\
-window/stretch/aspect="expand"\
-window/stretch/scale="1.0"\
-window/size/viewport_width=2388\
-window/size/viewport_height=1668\
-window/size/window_width_override=2388\
-window/size/window_height_override=1668' "$GODOT_FILE"
+            python3 - << 'PYEOF'
+          import re
+          path = "recovered/project.godot"
+          with open(path) as f:
+              content = f.read()
+          # Remove existing stretch/size settings
+          for key in ["window/stretch/mode", "window/stretch/aspect", "window/stretch/scale",
+                       "window/size/viewport_width", "window/size/viewport_height",
+                       "window/size/window_width_override", "window/size/window_height_override"]:
+              content = re.sub(rf'^{re.escape(key)}=.*\n?', '', content, flags=re.MULTILINE)
+          # Ensure [display] section exists
+          if '[display]' not in content:
+              content += '\n[display]\n'
+          # Insert stretch config after [display]
+          stretch = ('window/stretch/mode="canvas_items"\n'
+                     'window/stretch/aspect="expand"\n'
+                     'window/stretch/scale="1.0"\n'
+                     'window/size/viewport_width=2388\n'
+                     'window/size/viewport_height=1668\n'
+                     'window/size/window_width_override=2388\n'
+                     'window/size/window_height_override=1668\n')
+          content = content.replace('[display]\n', '[display]\n' + stretch, 1)
+          with open(path, 'w') as f:
+              f.write(content)
+          print("Patched [display] section")
+          PYEOF
             echo "=== Patched [display] section ==="
             grep -A 10 '^\[display\]' "$GODOT_FILE" | head -15
           else
@@ -232,29 +250,8 @@ window/size/window_height_override=1668' "$GODOT_FILE"
           sed -i '' '/CODE_SIGN_IDENTITY = "iPhone Distribution"/d' project.pbxproj
           sed -i '' 's/CODE_SIGNING_REQUIRED = YES/CODE_SIGNING_REQUIRED = NO/g' project.pbxproj
           sed -i '' 's/CODE_SIGNING_ALLOWED = YES/CODE_SIGNING_ALLOWED = NO/g' project.pbxproj
-          if ! grep -q 'CODE_SIGN_IDENTITY = ""' project.pbxproj; then
-            sed -i '' '/CODE_SIGNING_ALLOWED = NO/a\				CODE_SIGN_IDENTITY = "";\
-' project.pbxproj
-          fi
-          echo "=== Fixed signing settings ==="
-          grep -E "CODE_SIGN" project.pbxproj | head -20
-
-      - name: Fix signing conflict in project.pbxproj
-        run: |
-          cd PlantsVsZombiesHybrid.xcodeproj
-          # Replace automatic signing with manual and remove conflicting CODE_SIGN_IDENTITY
-          sed -i '' 's/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g' project.pbxproj
-          sed -i '' '/CODE_SIGN_IDENTITY = "Apple Distribution"/d' project.pbxproj
-          sed -i '' '/CODE_SIGN_IDENTITY = "iPhone Distribution"/d' project.pbxproj
-          # Add CODE_SIGNING_ALLOWED=NO to all build configurations
-          sed -i '' 's/CODE_SIGNING_REQUIRED = YES/CODE_SIGNING_REQUIRED = NO/g' project.pbxproj
-          sed -i '' 's/CODE_SIGNING_ALLOWED = YES/CODE_SIGNING_ALLOWED = NO/g' project.pbxproj
-          # Add CODE_SIGN_IDENTITY="" if not present
-          if ! grep -q 'CODE_SIGN_IDENTITY = ""' project.pbxproj; then
-            sed -i '' '/CODE_SIGNING_ALLOWED = NO/a\t			CODE_SIGN_IDENTITY = "";""' project.pbxproj
-          fi
           echo "Fixed project.pbxproj signing settings"
-          grep -E "CODE_SIGN|PROVISIONING" project.pbxproj | head -20
+          grep -E "CODE_SIGN" project.pbxproj | head -20
 
       - name: Build unsigned IPA
         run: |
