@@ -154,11 +154,12 @@ jobs:
       - name: Install iOS export templates
         run: |
           curl -L -o templates.tpz "https://github.com/godotengine/godot-builds/releases/download/4.7.1-stable/Godot_v4.7.1-stable_mono_export_templates.tpz"
-          TEMPLATES_DIR="$HOME/Library/Application Support/Godot/export_templates"
+          TEMPLATES_DIR="$HOME/Library/Application Support/Godot/export_templates/4.7.1.stable.mono"
           mkdir -p "$TEMPLATES_DIR"
-          # .tpz is actually a zip file
-          mv templates.tpz templates.zip
-          unzip -q templates.zip -d "$TEMPLATES_DIR"
+          # .tpz is a zip with templates/ subdirectory
+          unzip -q templates.tpz -d /tmp/templates_extract
+          # Move contents from templates/ to the versioned directory
+          cp -r /tmp/templates_extract/templates/* "$TEMPLATES_DIR/"
           echo "Templates installed"
           ls "$TEMPLATES_DIR/"
 
