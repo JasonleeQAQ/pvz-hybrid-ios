@@ -1,0 +1,43 @@
+name: Upload Source to Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_url:
+        description: 'Direct download URL for the ZIP'
+        required: true
+        type: string
+      version:
+        description: 'Version tag (e.g. 0.25.5)'
+        required: false
+        default: '0.25.5'
+        type: string
+
+jobs:
+  upload:
+    runs-on: macos-15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Download ZIP from source URL
+        run: |
+          curl --fail --location --retry 5 --retry-all-errors --retry-delay 3 --continue-at - --output source.zip "${{ github.event.inputs.source_url }}"
+          ls -la source.zip
+          echo "Download complete: $(stat -f%z source.zip) bytes"
+
+      - name: Create Release and upload ZIP
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RELEASE_TAG="v${{ github.event.inputs.version }}"
+          # Create release if it doesn't exist
+          if ! gh release view "$RELEASE_TAG" &>/dev/null; then
+            echo "Creating release $RELEASE_TAG..."
+            gh release create "$RELEASE_TAG" --title "Source $RELEASE_TAG" --notes "Source ZIP for $RELEASE_TAG"
+          fi
+          # Upload ZIP (overwrite if exists)
+          gh release upload "$RELEASE_TAG" "source.zip" --clobber
+          echo "Uploaded source.zip to release $RELEASE_TAG"
+          # Get the download URL
+          echo "Download URL: https://github.com/${{ github.repository }}/releases/download/$RELEASE_TAG/source.zip"

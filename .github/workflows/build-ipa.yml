@@ -3,10 +3,6 @@ name: Build iOS IPA
 on:
   workflow_dispatch:
     inputs:
-      source_url:
-        description: 'ZIP download URL'
-        required: true
-        type: string
       app_name:
         description: 'Application name'
         required: false
@@ -30,9 +26,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Download ZIP
+      - name: Download ZIP from Release
         run: |
-          curl --fail --location --retry 5 --retry-all-errors --retry-delay 3 --continue-at - --output source.zip "${{ github.event.inputs.source_url }}"
+          RELEASE_TAG="v${{ github.event.inputs.version }}"
+          curl --fail --location --retry 5 --retry-all-errors --retry-delay 3 --continue-at - --output source.zip "https://github.com/${{ github.repository }}/releases/download/$RELEASE_TAG/source.zip"
           ls -la source.zip
 
       - name: Install 7-Zip (Deflate64 support)
