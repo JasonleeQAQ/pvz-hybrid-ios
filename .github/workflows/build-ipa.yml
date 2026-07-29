@@ -27,28 +27,25 @@ on:
 jobs:
   build:
     runs-on: macos-15
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
 
       # ========== 断点恢复：尝试拉取上次中间产物 ==========
-      - name: 恢复阶段1-GDRE恢复产物
+      - name: 拉取阶段1-GDRE恢复产物
         id: recover-stage
-        continue-on-error: true
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v4
         with:
           path: recovered/
           key: gdre-recovery-${{ runner.os }}-${{ github.event.inputs.version }}
           restore-keys: |
             gdre-recovery-${{ runner.os }}-
 
-      - name: 恢复阶段2-Godot安装
+      - name: 拉取阶段2-Godot安装
         id: godot-cache
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v4
         with:
-          path: $HOME/Godot.app
+          path: /Users/runner/Godot.app
           key: godot-4.7.1-dotnet-macos
 
       # ========== 阶段1：下载 + GDRE 恢复 ==========
@@ -103,6 +100,14 @@ jobs:
           GDRE_BIN="gdre_extracted/Godot RE Tools.app/Contents/MacOS/Godot RE Tools"
           "$GDRE_BIN" --recover="$PCK" --output=recovered/ 2>&1 | tail -20
           ls recovered/ | head -10
+
+      # ========== 强制保存阶段1缓存（不管后面构建成不成） ==========
+      - name: 强制保存阶段1缓存
+        if: steps.recover-stage.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: recovered/
+          key: gdre-recovery-${{ runner.os }}-${{ github.event.inputs.version }}
 
       - name: 保存阶段1产物（失败也保存）
         if: always() && steps.recover-stage.outputs.cache-hit != 'true'
@@ -193,14 +198,20 @@ jobs:
           echo "$GODOT" >> $GITHUB_PATH
           "$GODOT/Godot" --version
 
+      # ========== 强制保存 Godot 缓存（不管后面构建成不成） ==========
+      - name: 强制保存 Godot 缓存
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /Users/runner/Godot.app
+          key: godot-4.7.1-dotnet-macos
+
       - name: Install iOS export templates
         run: |
           curl -L -o templates.tpz "https://github.com/godotengine/godot-builds/releases/download/4.7.1-stable/Godot_v4.7.1-stable_mono_export_templates.tpz"
           TEMPLATES_DIR="$HOME/Library/Application Support/Godot/export_templates/4.7.1.stable.mono"
           mkdir -p "$TEMPLATES_DIR"
-          # .tpz is a zip with templates/ subdirectory
           unzip -q templates.tpz -d /tmp/templates_extract
-          # Move contents from templates/ to the versioned directory
           cp -r /tmp/templates_extract/templates/* "$TEMPLATES_DIR/"
           echo "Templates installed"
           ls "$TEMPLATES_DIR/"
@@ -208,12 +219,9 @@ jobs:
       - name: Export Xcode project
         run: |
           cd recovered
-          # Godot 4.7 iOS 导出会内部运行 xcodebuild，签名冲突会导致失败
-          # 但即使内部失败，xcodeproj 文件仍会被创建，我们后续手动构建
           godot --headless --export-release "iOS" ../PlantsVsZombiesHybrid.xcodeproj 2>&1 | tail -30 || true
           cd ..
           ls PlantsVsZombiesHybrid.xcodeproj/ 2>/dev/null || ls | grep xcodeproj
-          # Detect scheme from pbxproj (write to file to avoid shell quote issues)
           cat > detect_scheme.py << 'PYEOF'
           import re
           with open('PlantsVsZombiesHybrid.xcodeproj/project.pbxproj') as f:
@@ -230,8 +238,6 @@ jobs:
 
       - name: Patch project.godot for iPad fullscreen (stretch=expand)
         run: |
-          # Insert stretch settings into project.godot to eliminate black bars on 4:3 iPad
-          # Uses 'expand' aspect (ignore removed in 4.7) — viewport matches screen aspect, no letterbox
           GODOT_FILE="recovered/project.godot"
           if [ -f "$GODOT_FILE" ]; then
             if grep -q '^\[display\]' "$GODOT_FILE" ]; then
@@ -240,7 +246,6 @@ jobs:
               echo "" >> "$GODOT_FILE"
               echo "[display]" >> "$GODOT_FILE"
             fi
-            # Remove any existing stretch settings to avoid duplicates
             sed -i '' '/^window\/stretch\/mode/d' "$GODOT_FILE"
             sed -i '' '/^window\/stretch\/aspect/d' "$GODOT_FILE"
             sed -i '' '/^window\/stretch\/scale/d' "$GODOT_FILE"
@@ -248,21 +253,17 @@ jobs:
             sed -i '' '/^window\/size\/viewport_height/d' "$GODOT_FILE"
             sed -i '' '/^window\/size\/window_width_override/d' "$GODOT_FILE"
             sed -i '' '/^window\/size\/window_height_override/d' "$GODOT_FILE"
-            # Insert stretch config right after [display] line
             python3 - << 'PYEOF'
           import re
           path = "recovered/project.godot"
           with open(path) as f:
               content = f.read()
-          # Remove existing stretch/size settings
           for key in ["window/stretch/mode", "window/stretch/aspect", "window/stretch/scale",
                        "window/size/viewport_width", "window/size/viewport_height",
                        "window/size/window_width_override", "window/size/window_height_override"]:
               content = re.sub(rf'^{re.escape(key)}=.*\n?', '', content, flags=re.MULTILINE)
-          # Ensure [display] section exists
           if '[display]' not in content:
               content += '\n[display]\n'
-          # Insert stretch config after [display]
           stretch = ('window/stretch/mode="canvas_items"\n'
                      'window/stretch/aspect="expand"\n'
                      'window/stretch/scale="1.0"\n'
@@ -285,17 +286,20 @@ jobs:
       - name: Fix signing conflict in project.pbxproj
         run: |
           cd PlantsVsZombiesHybrid.xcodeproj
-          # pbxproj 中值可能带引号，用通用模式匹配
-          sed -i '' 's/CODE_SIGN_STYLE = .*Automatic.*/CODE_SIGN_STYLE = Manual/g' project.pbxproj
-          sed -i '' '/CODE_SIGN_IDENTITY = "Apple Distribution"/d' project.pbxproj
-          sed -i '' '/CODE_SIGN_IDENTITY = "iPhone Distribution"/d' project.pbxproj
-          sed -i '' '/CODE_SIGN_IDENTITY = "Apple Development"/d' project.pbxproj
-          sed -i '' 's/CODE_SIGNING_REQUIRED = YES/CODE_SIGNING_REQUIRED = NO/g' project.pbxproj
-          sed -i '' 's/CODE_SIGNING_ALLOWED = YES/CODE_SIGNING_ALLOWED = NO/g' project.pbxproj
-          # 也处理带引号的格式
-          sed -i '' 's/CODE_SIGN_STYLE = "Automatic"/CODE_SIGN_STYLE = Manual/g' project.pbxproj
-          sed -i '' 's/CODE_SIGNING_REQUIRED = "YES"/CODE_SIGNING_REQUIRED = NO/g' project.pbxproj
-          sed -i '' 's/CODE_SIGNING_ALLOWED = "YES"/CODE_SIGNING_ALLOWED = NO/g' project.pbxproj
+          # 安全替换，严格保留 Pbxproj 的结尾分号 (;)
+          sed -i '' 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = "Manual";/g' project.pbxproj
+          sed -i '' 's/CODE_SIGN_STYLE = "Automatic";/CODE_SIGN_STYLE = "Manual";/g' project.pbxproj
+          
+          # 将签名身份设置为空，而不是删除整行，防止破坏字典结构
+          sed -i '' 's/CODE_SIGN_IDENTITY = "[^"]*";/CODE_SIGN_IDENTITY = "";/g' project.pbxproj
+          sed -i '' 's/CODE_SIGN_IDENTITY = Apple[^;]*;/CODE_SIGN_IDENTITY = "";/g' project.pbxproj
+          sed -i '' 's/CODE_SIGN_IDENTITY = iPhone[^;]*;/CODE_SIGN_IDENTITY = "";/g' project.pbxproj
+          
+          sed -i '' 's/CODE_SIGNING_REQUIRED = YES;/CODE_SIGNING_REQUIRED = NO;/g' project.pbxproj
+          sed -i '' 's/CODE_SIGNING_REQUIRED = "YES";/CODE_SIGNING_REQUIRED = NO;/g' project.pbxproj
+          sed -i '' 's/CODE_SIGNING_ALLOWED = YES;/CODE_SIGNING_ALLOWED = NO;/g' project.pbxproj
+          sed -i '' 's/CODE_SIGNING_ALLOWED = "YES";/CODE_SIGNING_ALLOWED = NO;/g' project.pbxproj
+          
           echo "Fixed project.pbxproj signing settings"
           grep -E "CODE_SIGN" project.pbxproj | head -20
 
@@ -310,13 +314,12 @@ jobs:
       # ========== 阶段3：构建 IPA ==========
       - name: Build unsigned IPA
         run: |
-          # 注意：不要 cd 进 xcodeproj，从根目录运行 xcodebuild
-          # 去掉 SCHEME 中可能存在的字面引号（pbxproj 中 name = "X" 格式会导致捕获引号）
+          set -o pipefail
           SCHEME="${SCHEME//\"}"
           SCHEME="${SCHEME:-${{ github.event.inputs.app_name }}}"
           echo "Building with scheme: $SCHEME"
-          # 列出可用 scheme 用于调试
           xcodebuild -project PlantsVsZombiesHybrid.xcodeproj -list 2>&1 | head -20
+          
           xcodebuild -project PlantsVsZombiesHybrid.xcodeproj \
             -scheme "$SCHEME" \
             -configuration Release \
@@ -326,7 +329,12 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO 2>&1 | tail -50
-          # Find the built .app
+          XCODE_EXIT=${PIPESTATUS[0]}
+          if [ "$XCODE_EXIT" -ne 0 ]; then
+            echo "ERROR: xcodebuild failed with exit code $XCODE_EXIT"
+            exit "$XCODE_EXIT"
+          fi
+            
           APP_DIR="build/Build/Products/Release-iphoneos"
           APP=$(find "$APP_DIR" -maxdepth 1 -name "*.app" 2>/dev/null | head -1)
           if [ -z "$APP" ]; then
@@ -336,7 +344,7 @@ jobs:
           fi
           echo "APP found: $APP"
           ls -la "$APP" | head -5
-          # Package IPA (Payload/*.app → zip)
+          
           APP_BASENAME=$(basename "$APP")
           rm -rf ipa
           mkdir -p ipa/Payload
