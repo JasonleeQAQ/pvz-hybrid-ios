@@ -36,8 +36,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      # ========== 断点恢复：尝试拉取上次中间产物 ==========
+      # ========== 断点恢复：尝试拉取上次中间产物（force_recover=true 时跳过） ==========
       - name: 拉取阶段1-GDRE恢复产物
+        if: ${{ !inputs.force_recover }}
         id: recover-stage
         uses: actions/cache/restore@v4
         with:
@@ -48,7 +49,7 @@ jobs:
 
       # ========== 阶段1：下载 + GDRE 恢复 ==========
       - name: Download ZIP from Release
-        if: steps.recover-stage.outputs.cache-hit != 'true' || inputs.force_recover
+        if: steps.recover-stage.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -57,25 +58,25 @@ jobs:
           ls -la source.zip
 
       - name: Install 7-Zip (Deflate64 support)
-        if: steps.recover-stage.outputs.cache-hit != 'true' || inputs.force_recover
+        if: steps.recover-stage.outputs.cache-hit != 'true'
         run: |
           brew install p7zip
 
       - name: Unzip project
-        if: steps.recover-stage.outputs.cache-hit != 'true' || inputs.force_recover
+        if: steps.recover-stage.outputs.cache-hit != 'true'
         run: |
           7z x source.zip -oextracted -y
           ls extracted/
 
       - name: Setup Java 17
-        if: steps.recover-stage.outputs.cache-hit != 'true' || inputs.force_recover
+        if: steps.recover-stage.outputs.cache-hit != 'true'
         uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
 
       - name: Install GDRE
-        if: steps.recover-stage.outputs.cache-hit != 'true' || inputs.force_recover
+        if: steps.recover-stage.outputs.cache-hit != 'true'
         run: |
           curl -L -o gdre-macos.zip "https://github.com/GDRETools/gdsdecomp/releases/download/v2.6.0/GDRE_tools-v2.6.0-macos.zip"
           unzip -q gdre-macos.zip -d gdre_extracted
@@ -86,7 +87,7 @@ jobs:
 
       - name: Find and recover PCK
         id: recover
-        if: steps.recover-stage.outputs.cache-hit != 'true' || inputs.force_recover
+        if: steps.recover-stage.outputs.cache-hit != 'true'
         run: |
           PCK=$(find extracted -name "*.pck" | head -1)
           if [ -z "$PCK" ]; then
@@ -101,14 +102,14 @@ jobs:
 
       # ========== 强制保存阶段1缓存（不管后面构建成不成） ==========
       - name: 强制保存阶段1缓存
-        if: steps.recover-stage.outputs.cache-hit != 'true' || inputs.force_recover
+        if: steps.recover-stage.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: recovered/
           key: gdre-recovery-${{ runner.os }}-${{ github.event.inputs.version }}
 
       - name: 保存阶段1产物（失败也保存）
-        if: always() && (steps.recover-stage.outputs.cache-hit != 'true' || inputs.force_recover)
+        if: always() && (steps.recover-stage.outputs.cache-hit != 'true')
         uses: actions/upload-artifact@v5
         with:
           name: stage-recovered
