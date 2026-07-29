@@ -317,52 +317,52 @@ jobs:
           
           echo "Fixed project.pbxproj signing settings"
           grep -E "CODE_SIGN" project.pbxproj | head -20
-
       - name: Fix missing framework links (Metal/QuartzCore)
         run: |
+          cd PlantsVsZombiesHybrid.xcodeproj
           cat > fix_frameworks.py << 'FIXEOF'
-          import re, uuid, sys
+import re, uuid, sys
 
-          def gen_uuid():
-              return uuid.uuid4().hex[:24].upper()
+def gen_uuid():
+    return uuid.uuid4().hex[:24].upper()
 
-          def add_frameworks(pbxproj_path, frameworks):
-              with open(pbxproj_path, 'r') as f:
-                  content = f.read()
-              phase_pattern = re.compile(
-                  r'(/\* Begin PBXFrameworksBuildPhase section \*/.*?\* Frameworks \*/.*?\{.*?files = \()(.*?)(\);.*?\* End PBXFrameworksBuildPhase section \*/)',
-                  re.DOTALL
-              )
-              match = phase_pattern.search(content)
-              if not match:
-                  print("ERROR: Could not find PBXFrameworksBuildPhase")
-                  sys.exit(1)
-              existing = set(fw for fw in frameworks if fw in content)
-              to_add = [fw for fw in frameworks if fw not in existing]
-              if not to_add:
-                  print("All frameworks already linked")
-                  return
-              build_entries, ref_entries, list_entries = [], [], []
-              for fw in to_add:
-                  bu, ru = gen_uuid(), gen_uuid()
-                  build_entries.append(f"\t\t{bu} /* {fw} in Frameworks */ = {{isa = PBXBuildFile; fileRef = {ru} /* {fw} */; }};")
-                  ref_entries.append(f"\t\t{ru} /* {fw} */ = {{isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = {fw}; path = System/Library/Frameworks/{fw}; sourceTree = SDKROOT; }};")
-                  list_entries.append(f"\t\t\t\t{bu} /* {fw} in Frameworks */,")
-              bfe = content.rfind(';', 0, content.index('/* End PBXBuildFile section */'))
-              content = content[:bfe] + '\n' + '\n'.join(build_entries) + content[bfe:]
-              fre = content.rfind(';', 0, content.index('/* End PBXFileReference section */'))
-              content = content[:fre] + '\n' + '\n'.join(ref_entries) + content[fre:]
-              match = phase_pattern.search(content)
-              fc = match.group(2)
-              new_fc = fc.rstrip() + '\n' + '\n'.join(list_entries)
-              content = content[:match.start(2)] + new_fc + content[match.end(2):]
-              with open(pbxproj_path, 'w') as f:
-                  f.write(content)
-              print(f"Added: {', '.join(to_add)}")
+def add_frameworks(pbxproj_path, frameworks):
+    with open(pbxproj_path, 'r') as f:
+        content = f.read()
+    phase_pattern = re.compile(
+        r'(/\* Begin PBXFrameworksBuildPhase section \*/.*?\* Frameworks \*/.*?\{.*?files = \()(.*?)(\);.*?\* End PBXFrameworksBuildPhase section \*/)',
+        re.DOTALL
+    )
+    match = phase_pattern.search(content)
+    if not match:
+        print("ERROR: Could not find PBXFrameworksBuildPhase")
+        sys.exit(1)
+    existing = set(fw for fw in frameworks if fw in content)
+    to_add = [fw for fw in frameworks if fw not in existing]
+    if not to_add:
+        print("All frameworks already linked")
+        return
+    build_entries, ref_entries, list_entries = [], [], []
+    for fw in to_add:
+        bu, ru = gen_uuid(), gen_uuid()
+        build_entries.append(f"\t\t{bu} /* {fw} in Frameworks */ = {{isa = PBXBuildFile; fileRef = {ru} /* {fw} */; }};")
+        ref_entries.append(f"\t\t{ru} /* {fw} */ = {{isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = {fw}; path = System/Library/Frameworks/{fw}; sourceTree = SDKROOT; }};")
+        list_entries.append(f"\t\t\t\t{bu} /* {fw} in Frameworks */,")
+    bfe = content.rfind(';', 0, content.index('/* End PBXBuildFile section */'))
+    content = content[:bfe] + '\n' + '\n'.join(build_entries) + content[bfe:]
+    fre = content.rfind(';', 0, content.index('/* End PBXFileReference section */'))
+    content = content[:fre] + '\n' + '\n'.join(ref_entries) + content[fre:]
+    match = phase_pattern.search(content)
+    fc = match.group(2)
+    new_fc = fc.rstrip() + '\n' + '\n'.join(list_entries)
+    content = content[:match.start(2)] + new_fc + content[match.end(2):]
+    with open(pbxproj_path, 'w') as f:
+        f.write(content)
+    print(f"Added: {', '.join(to_add)}")
 
-          add_frameworks("project.pbxproj",
-                        ["Metal.framework", "QuartzCore.framework", "AudioUnit.framework", "CoreAudioTypes.framework"])
-          FIXEOF
+add_frameworks("project.pbxproj",
+              ["Metal.framework", "QuartzCore.framework", "AudioUnit.framework", "CoreAudioTypes.framework"])
+FIXEOF
           python3 fix_frameworks.py
           echo "=== Verify frameworks in pbxproj ==="
           grep -c "Metal.framework" project.pbxproj
