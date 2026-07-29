@@ -59,10 +59,8 @@ jobs:
 
       - name: Fix export_presets.cfg for iPad fullscreen
         run: |
-          PRESETS="recovered/export_presets.cfg"
-          mkdir -p recovered
-          cat > "$PRESETS" << 'EOF'
-[preset.0]
+          python3 << 'PYEOF'
+          config = """[preset.0]
 name="iOS"
 platform="iOS"
 runnable=true
@@ -114,8 +112,13 @@ application/export_method_debug=0
 application/export_method_release=0
 application/code_sign_identity_debug=""
 application/code_sign_identity_release=""
-EOF
-          echo "export_presets.cfg created"
+"""
+          import os
+          os.makedirs("recovered", exist_ok=True)
+          with open("recovered/export_presets.cfg", "w") as f:
+              f.write(config)
+          print("export_presets.cfg created")
+          PYEOF
 
       - name: Fix project.godot fullscreen config
         run: |
