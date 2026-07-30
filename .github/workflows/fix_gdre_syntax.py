@@ -36,9 +36,8 @@ def fix_file(filepath):
             print(f'  Fixed out ref at {filepath}:{i+1}')
             fixed = True
 
-        # Fix: (ref val) in non-method-call context (e.g. DefaultInterpolatedStringHandler pattern)
-        # Pattern: something like `((SomeType)(ref expr))` where ref is invalid
-        # Only do this for cast expressions where ref is between ) and (
+        # Fix: cast+ref pattern: (Type)(ref var) -> (Type)(var)
+        # This handles GDRE decompiling tuple deconstruction with ref
         new_line = re.sub(
             r'(\)\s*\()ref\s+(\w+)',
             r'\1\2',
@@ -47,6 +46,34 @@ def fix_file(filepath):
         if new_line != line and new_line != lines[i]:
             if re.search(r'\)\s*\(\s*ref', line):
                 print(f'  Fixed cast+ref pattern at {filepath}:{i+1}')
+                fixed = True
+
+        # Fix: standalone ref used as variable name (GDRE puts ref where original had @ref)
+        # Pattern: after assignment/comparison operators, before semicolon, etc.
+        # e.g.: x = ref;  ->  x = @ref;
+        # or: SomeMethod(ref); where ref should be a variable
+        # This is tricky - only fix when ref is clearly a standalone expression
+        new_line = re.sub(r'(?<![.\w])ref(?=\s*[;,\]\)])', '@ref', new_line)
+        if new_line != line and new_line != lines[i]:
+            if re.search(r'(?<![.\w])ref(?=\s*[;,\]\)])', line):
+                print(f'  Fixed standalone ref as @ref at {filepath}:{i+1}')
+                fixed = True
+
+        # Fix: GDRE decompiled goto label pattern where label_N is used as variable
+        # Ref might appear in other binary expressions
+        # e.g. someVar | ref  or  ref | someVar
+        new_line = re.sub(r'(?<=\|\s?)ref\b', '@ref', new_line)
+        new_line = re.sub(r'\bref(?=\s?\|)', '@ref', new_line)
+        if new_line != line and new_line != lines[i]:
+            if re.search(r'\bref\s*\|', line) or re.search(r'\|\s*ref', line):
+                print(f'  Fixed ref in binary expression at {filepath}:{i+1}')
+                fixed = True
+
+        # Fix: ref used as lvalue in assignment (GDRE might output ref = X)
+        new_line = re.sub(r'(?<=[\s\(,;])(ref)\s*=', '@ref =', new_line)
+        if new_line != line and new_line != lines[i]:
+            if re.search(r'(?<![.\w])ref\s*=', line):
+                print(f'  Fixed ref assignment at {filepath}:{i+1}')
                 fixed = True
 
         lines[i] = new_line
@@ -59,12 +86,14 @@ def fix_file(filepath):
 def main():
     root = sys.argv[1] if len(sys.argv) > 1 else 'recovered'
     count = 0
+    total_cs = 0
     for dirpath, _, filenames in os.walk(root):
         for fn in filenames:
             if fn.endswith('.cs'):
+                total_cs += 1
                 if fix_file(os.path.join(dirpath, fn)):
                     count += 1
-    print(f'Fixed {count} files')
+    print(f'Fixed {count} / {total_cs} .cs files')
 
 if __name__ == '__main__':
     main()

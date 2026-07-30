@@ -229,7 +229,7 @@ jobs:
         run: |
           set -euo pipefail
           cd recovered
-          python3 ../.github/workflows/fix_gdre_syntax.py recovered
+          python3 ../.github/workflows/fix_gdre_syntax.py .
           cd ..
 
       - name: Build C# with dotnet
