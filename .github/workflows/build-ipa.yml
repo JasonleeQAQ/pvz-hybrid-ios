@@ -60,7 +60,7 @@ jobs:
       - name: Install 7-Zip (Deflate64 support)
         if: steps.recover-stage.outputs.cache-hit != 'true'
         run: |
-          brew install p7zip
+          brew list p7zip &>/dev/null || brew install p7zip
 
       - name: Unzip project
         if: steps.recover-stage.outputs.cache-hit != 'true'
@@ -248,7 +248,13 @@ jobs:
         run: |
           set -euo pipefail
           cd recovered
-          godot --headless --export-release "iOS" ../PlantsVsZombiesHybrid.xcodeproj 2>&1 | tail -30 || true
+          godot --headless --export-release "iOS" ../PlantsVsZombiesHybrid.xcodeproj 2>&1 | tail -30
+          GODOT_EXIT=${PIPESTATUS[0]}
+          if [ "$GODOT_EXIT" -ne 0 ]; then
+            echo "ERROR: Godot export failed with exit code $GODOT_EXIT"
+            ls -la ../
+            exit "$GODOT_EXIT"
+          fi
           cd ..
           ls PlantsVsZombiesHybrid.xcodeproj/ 2>/dev/null || ls | grep xcodeproj
           SCHEME=$(python3 .github/workflows/detect_scheme.py)
@@ -314,7 +320,7 @@ jobs:
       - name: Build unsigned IPA
         id: build-ipa
         run: |
-          set -o pipefail
+          set -euo pipefail
           SCHEME="${SCHEME//\"}"
           SCHEME="${SCHEME:-${{ github.event.inputs.app_name }}}"
           echo "Building with scheme: $SCHEME"
@@ -402,7 +408,7 @@ jobs:
           rm -rf ipa
           mkdir -p ipa/Payload
           cp -R "$APP" "ipa/Payload/$APP_BASENAME"
-          IPA_NAME="pvz-hybrid.ipa"
+          IPA_NAME="pvz-hybrid-v${{ github.event.inputs.version }}.ipa"
           (cd ipa && zip -qry "../$IPA_NAME" Payload)
           if [ ! -f "$IPA_NAME" ]; then
             echo "ERROR: IPA creation failed"
@@ -420,6 +426,7 @@ jobs:
           retention-days: 7
 
       - name: Create Release and upload IPA
+        if: steps.build-ipa.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.PAT }}
         run: |
