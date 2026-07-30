@@ -59,16 +59,6 @@ def fix_file(filepath):
                 print(f'  Fixed standalone ref as @ref at {filepath}:{i+1}')
                 fixed = True
 
-        # Fix: GDRE decompiled goto label pattern where label_N is used as variable
-        # Ref might appear in other binary expressions
-        # e.g. someVar | ref  or  ref | someVar
-        new_line = re.sub(r'(?<=\|\s?)ref\b', '@ref', new_line)
-        new_line = re.sub(r'\bref(?=\s?\|)', '@ref', new_line)
-        if new_line != line and new_line != lines[i]:
-            if re.search(r'\bref\s*\|', line) or re.search(r'\|\s*ref', line):
-                print(f'  Fixed ref in binary expression at {filepath}:{i+1}')
-                fixed = True
-
         # Fix: ref used as lvalue in assignment (GDRE might output ref = X)
         new_line = re.sub(r'(?<=[\s\(,;])(ref)\s*=', '@ref =', new_line)
         if new_line != line and new_line != lines[i]:
