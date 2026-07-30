@@ -306,6 +306,8 @@ jobs:
           cd recovered
           CSPROJ=$(ls *.csproj | head -1)
           echo "Building $CSPROJ with dotnet..."
+          # Patch csproj to suppress CS0165 (GDRE decompilation: uninitialized local vars)
+          python3 ../.github/workflows/patch_csproj_nowarn.py
           dotnet restore "$CSPROJ" 2>&1
           dotnet build "$CSPROJ" -c Release 2>&1
           echo "=== Build output ==="
