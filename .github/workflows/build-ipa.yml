@@ -24,7 +24,7 @@ on:
         default: 'AAAAAAAAAA'
         type: string
       force_recover:
-        description: 'Force GDRE recovery (disable cache)'
+        description: 'Force GDRE extract (disable cache)'
         required: false
         default: false
         type: boolean
@@ -36,7 +36,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      # ========== 标准化 version 输入（去掉可能带的 v 前缀） ==========
+      # ========== 标准化 version 输入 ==========
       - name: Normalize version
         id: normver
         run: |
@@ -45,36 +45,33 @@ jobs:
           echo "raw=$VER" >> "$GITHUB_OUTPUT"
           echo "Normalized version: $VER"
 
-      # ========== 先获取 GDRE 最新版本（用于缓存 key，确保版本升级后强制重新 recover） ==========
+      # ========== 获取 GDRE 最新版本（用于缓存 key） ==========
       - name: 获取 GDRE 最新版本
         id: gdre-version-check
         run: |
           GDRE_VER=$(curl -s --max-time 10 https://api.github.com/repos/GDRETools/gdsdecomp/releases/latest | \
             python3 -c "import json,sys; d=json.load(sys.stdin); print(d['tag_name'])" 2>/dev/null || echo "")
           if [ -z "$GDRE_VER" ]; then
-            # Fallback: rate limited or API unavailable - use known latest
             GDRE_VER="v2.6.3"
             echo "WARNING: GitHub API unavailable, using fallback GDRE version $GDRE_VER"
           fi
           echo "gdre_version=$GDRE_VER" >> "$GITHUB_OUTPUT"
           echo "GDRE latest: $GDRE_VER"
 
-      # ========== 断点恢复：尝试拉取上次中间产物（force_recover=true 时跳过） ==========
-      - name: 拉取阶段1-GDRE恢复产物
+      # ========== 断点恢复：尝试拉取上次 extract 产物 ==========
+      - name: 拉取阶段1-GDRE提取产物
         if: ${{ !inputs.force_recover }}
-        id: recover-stage
+        id: extract-stage
         uses: actions/cache/restore@v5
         with:
           path: recovered/
-          # Bind recovery cache to this workflow commit so syntax-fixer changes
-          # can never reuse a previously mutated recovered/ tree.
-          key: gdre-recovery-v2-${{ runner.os }}-${{ steps.normver.outputs.raw }}-${{ steps.gdre-version-check.outputs.gdre_version }}-${{ github.sha }}
+          key: gdre-extract-${{ runner.os }}-${{ steps.normver.outputs.raw }}-${{ steps.gdre-version-check.outputs.gdre_version }}-${{ github.sha }}
 
-      # ========== 判断缓存是否真正生效（精确命中 或 restore-keys 拉到了 recovered/） ==========
+      # ========== 判断缓存是否有效 ==========
       - name: 判断缓存是否有效
         id: cache-valid
         run: |
-          CACHE_HIT="${{ steps.recover-stage.outputs.cache-hit }}"
+          CACHE_HIT="${{ steps.extract-stage.outputs.cache-hit }}"
           if [ "$CACHE_HIT" = "true" ]; then
             echo "valid=true" >> "$GITHUB_OUTPUT"
             echo "Exact cache hit, good"
@@ -83,10 +80,10 @@ jobs:
             echo "Cache restored via restore-keys (recovered/ exists)"
           else
             echo "valid=false" >> "$GITHUB_OUTPUT"
-            echo "No cache, need to download and recover"
+            echo "No cache, need to download and extract"
           fi
 
-      # ========== 阶段1：下载 + GDRE 恢复 ==========
+      # ========== 阶段1：下载 + GDRE extract ==========
       - name: Download ZIP from Release
         if: steps.cache-valid.outputs.valid != 'true'
         env:
@@ -127,8 +124,8 @@ jobs:
           echo "GDRE installed: $GDRE_BIN ($GDRE_VERSION)"
           "$GDRE_BIN" --help 2>&1 | head -5 || true
 
-      - name: Find and recover PCK
-        id: recover
+      - name: Find and extract PCK (raw extract, no decompile)
+        id: extract
         if: steps.cache-valid.outputs.valid != 'true'
         run: |
           PCK=$(find extracted -name "*.pck" | head -1)
@@ -139,76 +136,55 @@ jobs:
           echo "Found PCK: $PCK"
           mkdir -p recovered
           GDRE_BIN="gdre_extracted/Godot RE Tools.app/Contents/MacOS/Godot RE Tools"
-          "$GDRE_BIN" --recover="$PCK" --output=recovered/ 2>&1 | tail -20
-          ls recovered/ | head -10
+          echo "=== Running GDRE --extract ==="
+          "$GDRE_BIN" --extract="$PCK" --output=recovered/ 2>&1 | tail -30
+          echo "=== Extracted files (top 20) ==="
+          ls recovered/ | head -20
+          echo "=== Total files ==="
+          find recovered/ -type f | wc -l
+          echo "=== .dll files ==="
+          find recovered/ -name "*.dll" | head -20
+          echo "=== project.godot exists? ==="
+          test -f recovered/project.godot && echo "YES" || echo "NO"
 
-      # ========== 强制保存阶段1缓存（不管后面构建成不成） ==========
+      # ========== 强制保存阶段1缓存 ==========
       - name: 强制保存阶段1缓存
         id: save-stage1
         if: steps.cache-valid.outputs.valid != 'true'
         uses: actions/cache/save@v5
         with:
           path: recovered/
-          key: gdre-recovery-v2-${{ runner.os }}-${{ steps.normver.outputs.raw }}-${{ steps.gdre-version-check.outputs.gdre_version }}-${{ github.sha }}
+          key: gdre-extract-${{ runner.os }}-${{ steps.normver.outputs.raw }}-${{ steps.gdre-version-check.outputs.gdre_version }}-${{ github.sha }}
 
       - name: 保存阶段1产物（失败也保存）
         if: always() && (steps.cache-valid.outputs.valid != 'true')
         uses: actions/upload-artifact@v6
         with:
-          name: stage-recovered
+          name: stage-extracted
           path: recovered/
           retention-days: 7
 
       # ========== 阶段2：探测版本 + 安装 Godot ==========
-      - name: Detect Godot and .NET versions
+      - name: Detect Godot version from project.godot
         id: detect
         run: |
           set -euo pipefail
-          CSPROJ_FILE=$(ls recovered/*.csproj 2>/dev/null | head -1)
-          GLOBAL_JSON="recovered/global.json"
-
-          # 优先从 global.json 读 .NET 版本
-          DOTNET_VER=""
-          if [ -f "$GLOBAL_JSON" ]; then
-            DOTNET_VER=$(python3 -c 'import json; d=json.load(open("'"$GLOBAL_JSON"'")); v=d.get("sdk",{}).get("version",""); print(f"{v.split(chr(46))[0]}.{v.split(chr(46))[1]}") if v else print("")' 2>/dev/null || true)
+          # 从 project.godot 读 Godot 版本
+          GODOT_VER="4.7.0"
+          if [ -f "recovered/project.godot" ]; then
+            DETECTED=$(grep -i '^config/features=' recovered/project.godot | grep -oP '"[0-9]+\.[0-9]+' | head -1 | tr -d '"' || true)
+            if [ -n "$DETECTED" ]; then
+              GODOT_VER="$DETECTED"
+            fi
           fi
-
-          # 从 .csproj 读 Godot SDK 版本和 TargetFramework
-          GODOT_SDK=""
-          TF=""
-          if [ -n "$CSPROJ_FILE" ]; then
-            GODOT_SDK=$(python3 -c "import re; c=open('$CSPROJ_FILE').read(); m=re.search(r'Godot\\.NET\\.Sdk/([0-9]+\\.[0-9]+\\.[0-9]+)',c); print(m.group(1)) if m else (print(re.search(r'Godot\\.NET\\.Sdk/([0-9]+\\.[0-9]+)',c).group(1)) if re.search(r'Godot\\.NET\\.Sdk/([0-9]+\\.[0-9]+)',c) else print(''))")
-            TF=$(python3 -c "import re; c=open('$CSPROJ_FILE').read(); m=re.search(r'<TargetFramework>net([0-9]+)',c); print('net'+m.group(1)) if m else print('')")
-          fi
-
-          # .NET 版本：global.json > csproj > 默认 8.0
-          if [ -z "$DOTNET_VER" ] && [ -n "$TF" ]; then
-            TF_NUM="${TF#net}"
-            DOTNET_VER="${TF_NUM:0:1}.${TF_NUM:1}"
-          fi
-          DOTNET_VER="${DOTNET_VER:-8.0}"
-
-          # Godot 版本：csproj > 默认 4.7.0
-          GODOT_STABLE="${GODOT_SDK:-4.7.0}-stable"
-
+          GODOT_STABLE="${GODOT_VER}-stable"
           echo "godot_version=$GODOT_STABLE" >> $GITHUB_OUTPUT
-          echo "dotnet_version=$DOTNET_VER" >> $GITHUB_OUTPUT
           echo "godot_cache_key=godot-${GODOT_STABLE}-${{ runner.os }}" >> $GITHUB_OUTPUT
-          echo "Godot: $GODOT_STABLE, .NET: $DOTNET_VER"
+          echo "Godot: $GODOT_STABLE"
 
       - name: Generate export_presets.cfg
         run: |
           python3 .github/workflows/generate_presets.py "${{ github.event.inputs.app_name }}" "${{ github.event.inputs.bundle_id }}" "${{ github.event.inputs.version }}" "${{ github.event.inputs.team_id }}"
-
-      - name: Setup .NET SDK
-        uses: actions/setup-dotnet@v5
-        with:
-          dotnet-version: '${{ steps.detect.outputs.dotnet_version }}.x'
-
-      - name: Install .NET iOS Workload
-        run: |
-          dotnet workload install ios
-          echo ".NET iOS workload installed successfully."
 
       - name: Install Godot
         id: godot-cache
@@ -222,7 +198,6 @@ jobs:
         run: |
           set -euo pipefail
           GODOT_VER="${{ steps.detect.outputs.godot_version }}"
-          # CDN 版本号去掉 .0（4.7.0-stable → 4.7-stable）
           GODOT_VER_CDN="${GODOT_VER%.0-stable}-stable"
           echo "Downloading Godot $GODOT_VER Mono (CDN: $GODOT_VER_CDN)"
           curl -L -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VER_CDN}/Godot_v${GODOT_VER_CDN}_mono_macos.universal.zip"
@@ -267,68 +242,27 @@ jobs:
           echo "Templates installed"
           ls "$TEMPLATES_DIR/"
 
-      # ========== Godot Mono 构建流程：直接 dotnet build（跳过 godot --build-solutions，插件在 headless 下报错） ==========
-      - name: Remove test code and editor-only addons (GDRE artifacts)
+      # ========== 清理 extract 产物中的编辑器残留 ==========
+      - name: Clean up editor-only addons from extracted files
         run: |
           set -euo pipefail
           cd recovered
-          # Test/ is the actual GDRE-recovered test directory (Note: NOT Tests/)
-          echo "=== Removing Test/ and Tests/ ==="
-          rm -rf Test/ Tests/
-          # ModEditor: provides editor UI types (XWGenericVisualResourceEditor etc.)
-          # used ONLY in Test/ files which are already deleted above.
-          # AdobeAnimateEditor: provides runtime C# types (AdobeAnimateSprite/Part/Slot/Data etc.)
-          # used by core game scripts -- DO NOT delete.
-          echo "=== Removing ModEditor addon only ==="
-          rm -rf addons/ModEditor/
-          # XWAdobeAnimateImportService.cs references PVZHE.ModEditor.FileSystem (from deleted ModEditor)
-          # It's an editor import tool, not runtime code — safe to remove.
-          rm -f addons/AdobeAnimateEditor/Tools/XWAdobeAnimateImportService.cs
+          echo "=== Removing ModEditor addon (editor-only) ==="
+          rm -rf addons/ModEditor/ 2>/dev/null || true
+          # XWAdobeAnimateImportService.cs references ModEditor — editor-only
+          rm -f addons/AdobeAnimateEditor/Tools/XWAdobeAnimateImportService.cs 2>/dev/null || true
           echo "=== Cleaning up broken plugin/autoload refs from project.godot ==="
-          python3 ../.github/workflows/clean_project_godot.py project.godot
+          if [ -f project.godot ]; then
+            python3 ../.github/workflows/clean_project_godot.py project.godot
+          fi
           echo "=== Remaining addons ==="
           ls -d addons/*/ 2>/dev/null || echo "No addons"
           echo "=== Size ==="
           du -sh . | cut -f1
           cd ..
 
-      - name: Fix GDRE decompiled C# syntax issues
-        run: |
-          set -euo pipefail
-          cd recovered
-          python3 ../.github/workflows/fix_gdre_syntax.py . --verbose
-          cd ..
-
-      - name: Build C# with dotnet
-        id: dotnet-build
-        run: |
-          set -euo pipefail
-          cd recovered
-          CSPROJ=$(ls *.csproj | head -1)
-          echo "Building $CSPROJ with dotnet..."
-          # Keep GDRE output unchanged here. CS0165 is a compiler diagnostic that
-          # requires source/control-flow correction; heuristic bulk rewrites are unsafe.
-          dotnet restore "$CSPROJ" 2>&1 | tee dotnet-restore.log
-          dotnet build "$CSPROJ" -c Release 2>&1 | tee dotnet-build.log
-          echo "=== Build output ==="
-          ls -la bin/Release/*/ 2>/dev/null || echo "No bin/Release output"
-          cd ..
-      - name: 保存 C# 编译诊断（失败也保存）
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: csharp-build-diagnostics
-          path: |
-            recovered/dotnet-restore.log
-            recovered/dotnet-build.log
-            recovered/PlantsVsZombies.csproj
-            recovered/project.godot
-          if-no-files-found: warn
-          retention-days: 7
-
       - name: Patch project.godot for iPad fullscreen (stretch=expand)
         run: |
-          # Must run BEFORE export so settings are baked into xcodeproj
           GODOT_FILE="recovered/project.godot"
           if [ ! -f "$GODOT_FILE" ]; then
             echo "WARNING: project.godot not found at $GODOT_FILE"
@@ -354,8 +288,6 @@ jobs:
         run: |
           set -euo pipefail
           cd recovered
-          # Temporarily disable errexit+pipefail so godot's exit code
-          # can be captured via PIPESTATUS even when godot fails.
           set +e
           set +o pipefail
           godot --headless --export-release "iOS" ../PlantsVsZombiesHybrid.xcodeproj 2>&1 | tail -30
