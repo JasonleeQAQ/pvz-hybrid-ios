@@ -36,6 +36,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
+      # ========== 标准化 version 输入（去掉可能带的 v 前缀） ==========
+      - name: Normalize version
+        id: normver
+        run: |
+          VER="${{ github.event.inputs.version }}"
+          VER="${VER#v}"
+          echo "raw=$VER" >> "$GITHUB_OUTPUT"
+          echo "Normalized version: $VER"
+
       # ========== 断点恢复：尝试拉取上次中间产物（force_recover=true 时跳过） ==========
       - name: 拉取阶段1-GDRE恢复产物
         if: ${{ !inputs.force_recover }}
@@ -43,40 +52,56 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: recovered/
-          key: gdre-recovery-${{ runner.os }}-${{ github.event.inputs.version }}
+          key: gdre-recovery-${{ runner.os }}-${{ steps.normver.outputs.raw }}
           restore-keys: |
             gdre-recovery-${{ runner.os }}-
 
+      # ========== 判断缓存是否真正生效（精确命中 或 restore-keys 拉到了 recovered/） ==========
+      - name: 判断缓存是否有效
+        id: cache-valid
+        run: |
+          CACHE_HIT="${{ steps.recover-stage.outputs.cache-hit }}"
+          if [ "$CACHE_HIT" = "true" ]; then
+            echo "valid=true" >> "$GITHUB_OUTPUT"
+            echo "Exact cache hit, good"
+          elif [ -d recovered ] && [ -f "recovered/project.godot" ]; then
+            echo "valid=true" >> "$GITHUB_OUTPUT"
+            echo "Cache restored via restore-keys (recovered/ exists)"
+          else
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            echo "No cache, need to download and recover"
+          fi
+
       # ========== 阶段1：下载 + GDRE 恢复 ==========
       - name: Download ZIP from Release
-        if: steps.recover-stage.outputs.cache-hit != 'true'
+        if: steps.cache-valid.outputs.valid != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          RELEASE_TAG="v$(echo '${{ github.event.inputs.version }}' | sed 's/^v//')"
+          RELEASE_TAG="v${{ steps.normver.outputs.raw }}"
           gh release download "$RELEASE_TAG" --pattern "source.zip"
           ls -la source.zip
 
       - name: Install 7-Zip (Deflate64 support)
-        if: steps.recover-stage.outputs.cache-hit != 'true'
+        if: steps.cache-valid.outputs.valid != 'true'
         run: |
           brew list p7zip &>/dev/null || brew install p7zip
 
       - name: Unzip project
-        if: steps.recover-stage.outputs.cache-hit != 'true'
+        if: steps.cache-valid.outputs.valid != 'true'
         run: |
           7z x source.zip -oextracted -y
           ls extracted/
 
       - name: Setup Java 17
-        if: steps.recover-stage.outputs.cache-hit != 'true'
+        if: steps.cache-valid.outputs.valid != 'true'
         uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
 
       - name: Install GDRE
-        if: steps.recover-stage.outputs.cache-hit != 'true'
+        if: steps.cache-valid.outputs.valid != 'true'
         run: |
           curl -L -o gdre-macos.zip "https://github.com/GDRETools/gdsdecomp/releases/download/v2.6.0/GDRE_tools-v2.6.0-macos.zip"
           unzip -q gdre-macos.zip -d gdre_extracted
@@ -87,7 +112,7 @@ jobs:
 
       - name: Find and recover PCK
         id: recover
-        if: steps.recover-stage.outputs.cache-hit != 'true'
+        if: steps.cache-valid.outputs.valid != 'true'
         run: |
           PCK=$(find extracted -name "*.pck" | head -1)
           if [ -z "$PCK" ]; then
@@ -102,14 +127,15 @@ jobs:
 
       # ========== 强制保存阶段1缓存（不管后面构建成不成） ==========
       - name: 强制保存阶段1缓存
-        if: steps.recover-stage.outputs.cache-hit != 'true'
+        id: save-stage1
+        if: steps.cache-valid.outputs.valid != 'true'
         uses: actions/cache/save@v4
         with:
           path: recovered/
-          key: gdre-recovery-${{ runner.os }}-${{ github.event.inputs.version }}
+          key: gdre-recovery-${{ runner.os }}-${{ steps.normver.outputs.raw }}
 
       - name: 保存阶段1产物（失败也保存）
-        if: always() && (steps.recover-stage.outputs.cache-hit != 'true')
+        if: always() && (steps.cache-valid.outputs.valid != 'true')
         uses: actions/upload-artifact@v5
         with:
           name: stage-recovered
@@ -408,7 +434,7 @@ jobs:
           rm -rf ipa
           mkdir -p ipa/Payload
           cp -R "$APP" "ipa/Payload/$APP_BASENAME"
-          IPA_NAME="pvz-hybrid-v$(echo '${{ github.event.inputs.version }}' | sed 's/^v//').ipa"
+          IPA_NAME="pvz-hybrid-v${{ steps.normver.outputs.raw }}.ipa"
           (cd ipa && zip -qry "../$IPA_NAME" Payload)
           if [ ! -f "$IPA_NAME" ]; then
             echo "ERROR: IPA creation failed"
@@ -430,7 +456,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PAT }}
         run: |
-          RELEASE_TAG="v$(echo '${{ github.event.inputs.version }}' | sed 's/^v//')"
+          RELEASE_TAG="v${{ steps.normver.outputs.raw }}"
           if gh release view "$RELEASE_TAG" &>/dev/null; then
             echo "Release $RELEASE_TAG exists, uploading IPA..."
           else
