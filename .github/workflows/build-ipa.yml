@@ -149,7 +149,7 @@ jobs:
         uses: actions/cache/save@v5
         with:
           path: recovered/
-          key: gdre-recovery-v2-${{ runner.os }}-${{ steps.normver.outputs.raw }}-${{ steps.gdre-version-check.outputs.gdre_version }}
+          key: gdre-recovery-v2-${{ runner.os }}-${{ steps.normver.outputs.raw }}-${{ steps.gdre-version-check.outputs.gdre_version }}-${{ github.sha }}
 
       - name: 保存阶段1产物（失败也保存）
         if: always() && (steps.cache-valid.outputs.valid != 'true')
