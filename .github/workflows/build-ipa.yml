@@ -235,7 +235,7 @@ jobs:
           echo "Downloading export templates for Godot $GODOT_VER"
           GODOT_VER_CDN="${GODOT_VER%.0-stable}-stable"
           curl -L -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VER_CDN}/Godot_v${GODOT_VER_CDN}_mono_export_templates.tpz"
-          TEMPLATES_DIR="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VER/-/.}.mono"
+          TEMPLATES_DIR="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VER_CDN/-/.}.mono"
           mkdir -p "$TEMPLATES_DIR"
           unzip -q templates.tpz -d /tmp/templates_extract
           cp -r /tmp/templates_extract/templates/* "$TEMPLATES_DIR/"
@@ -249,40 +249,51 @@ jobs:
           cd recovered
           echo "=== Removing ModEditor addon (editor-only) ==="
           rm -rf addons/ModEditor/ 2>/dev/null || true
-          # XWAdobeAnimateImportService.cs references ModEditor — editor-only
           rm -f addons/AdobeAnimateEditor/Tools/XWAdobeAnimateImportService.cs 2>/dev/null || true
-          echo "=== Cleaning up broken plugin/autoload refs from project.godot ==="
-          if [ -f project.godot ]; then
-            python3 ../.github/workflows/clean_project_godot.py project.godot
-          fi
           echo "=== Remaining addons ==="
           ls -d addons/*/ 2>/dev/null || echo "No addons"
           echo "=== Size ==="
           du -sh . | cut -f1
           cd ..
 
-      - name: Patch project.godot for iPad fullscreen (stretch=expand)
+      - name: Convert project.binary to project.godot and patch display
         run: |
-          GODOT_FILE="recovered/project.godot"
-          if [ ! -f "$GODOT_FILE" ]; then
-            echo "WARNING: project.godot not found at $GODOT_FILE"
-            ls recovered/ | head -10
-            exit 0
+          cd recovered
+          # GDRE --extract outputs project.binary (ECFG format).
+          # Godot can read it, but we need project.godot for text-based patching.
+          # Use Godot headless to open the project — it will generate project.godot.
+          if [ -f project.binary ] && [ ! -f project.godot ]; then
+            echo "=== Converting project.binary to project.godot via Godot ==="
+            # Run godot with the project path; it auto-converts binary to text on first open
+            timeout 30 godot --headless --path "$PWD" --quit 2>&1 || true
+            if [ -f project.godot ]; then
+              echo "project.godot generated successfully"
+            else
+              echo "WARNING: project.godot not generated, will try using project.binary directly"
+            fi
           fi
-          if ! grep -q '^\[display\]' "$GODOT_FILE"; then
-            echo "" >> "$GODOT_FILE"
-            echo "[display]" >> "$GODOT_FILE"
+          # Patch display settings if project.godot exists
+          if [ -f project.godot ]; then
+            echo "=== Patching project.godot for iPad fullscreen ==="
+            python3 ../.github/workflows/clean_project_godot.py project.godot
+            if ! grep -q '^\[display\]' project.godot; then
+              echo "" >> project.godot
+              echo "[display]" >> project.godot
+            fi
+            sed -i '' '/^window\/stretch\/mode/d' project.godot
+            sed -i '' '/^window\/stretch\/aspect/d' project.godot
+            sed -i '' '/^window\/stretch\/scale/d' project.godot
+            sed -i '' '/^window\/size\/viewport_width/d' project.godot
+            sed -i '' '/^window\/size\/viewport_height/d' project.godot
+            sed -i '' '/^window\/size\/window_width_override/d' project.godot
+            sed -i '' '/^window\/size\/window_height_override/d' project.godot
+            python3 ../.github/workflows/patch_godot_display.py
+            echo "=== Patched [display] section ==="
+            grep -A 10 '^\[display\]' project.godot | head -15
+          else
+            echo "No project.godot, display patch skipped (using project.binary)"
           fi
-          sed -i '' '/^window\/stretch\/mode/d' "$GODOT_FILE"
-          sed -i '' '/^window\/stretch\/aspect/d' "$GODOT_FILE"
-          sed -i '' '/^window\/stretch\/scale/d' "$GODOT_FILE"
-          sed -i '' '/^window\/size\/viewport_width/d' "$GODOT_FILE"
-          sed -i '' '/^window\/size\/viewport_height/d' "$GODOT_FILE"
-          sed -i '' '/^window\/size\/window_width_override/d' "$GODOT_FILE"
-          sed -i '' '/^window\/size\/window_height_override/d' "$GODOT_FILE"
-          python3 .github/workflows/patch_godot_display.py
-          echo "=== Patched [display] section ==="
-          grep -A 10 '^\[display\]' "$GODOT_FILE" | head -15
+          cd ..
 
       - name: Export Xcode project
         run: |
