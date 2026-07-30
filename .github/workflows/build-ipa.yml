@@ -49,7 +49,13 @@ jobs:
       - name: 获取 GDRE 最新版本
         id: gdre-version-check
         run: |
-          GDRE_VER=$(curl -s https://api.github.com/repos/GDRETools/gdsdecomp/releases/latest | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['tag_name'])")
+          GDRE_VER=$(curl -s --max-time 10 https://api.github.com/repos/GDRETools/gdsdecomp/releases/latest | \
+            python3 -c "import json,sys; d=json.load(sys.stdin); print(d['tag_name'])" 2>/dev/null || echo "")
+          if [ -z "$GDRE_VER" ]; then
+            # Fallback: rate limited or API unavailable - use known latest
+            GDRE_VER="v2.6.3"
+            echo "WARNING: GitHub API unavailable, using fallback GDRE version $GDRE_VER"
+          fi
           echo "gdre_version=$GDRE_VER" >> "$GITHUB_OUTPUT"
           echo "GDRE latest: $GDRE_VER"
 
@@ -57,7 +63,7 @@ jobs:
       - name: 拉取阶段1-GDRE恢复产物
         if: ${{ !inputs.force_recover }}
         id: recover-stage
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: recovered/
           key: gdre-recovery-${{ runner.os }}-${{ steps.normver.outputs.raw }}-${{ steps.gdre-version-check.outputs.gdre_version }}
@@ -140,14 +146,14 @@ jobs:
       - name: 强制保存阶段1缓存
         id: save-stage1
         if: steps.cache-valid.outputs.valid != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: recovered/
           key: gdre-recovery-${{ runner.os }}-${{ steps.normver.outputs.raw }}-${{ steps.gdre-version-check.outputs.gdre_version }}
 
       - name: 保存阶段1产物（失败也保存）
         if: always() && (steps.cache-valid.outputs.valid != 'true')
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: stage-recovered
           path: recovered/
@@ -195,7 +201,7 @@ jobs:
           python3 .github/workflows/generate_presets.py "${{ github.event.inputs.app_name }}" "${{ github.event.inputs.bundle_id }}" "${{ github.event.inputs.version }}" "${{ github.event.inputs.team_id }}"
 
       - name: Setup .NET SDK
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '${{ steps.detect.outputs.dotnet_version }}.x'
 
@@ -206,7 +212,7 @@ jobs:
 
       - name: Install Godot
         id: godot-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: /Users/runner/Godot.app
           key: ${{ steps.detect.outputs.godot_cache_key }}
@@ -228,7 +234,7 @@ jobs:
 
       - name: 强制保存 Godot 缓存
         if: steps.godot-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: /Users/runner/Godot.app
           key: ${{ steps.detect.outputs.godot_cache_key }}
@@ -375,7 +381,7 @@ jobs:
 
       - name: 保存阶段2产物（失败也保存）
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: stage-xcodeproj
           path: PlantsVsZombiesHybrid.xcodeproj/
@@ -488,7 +494,7 @@ jobs:
 
       - name: 保存阶段3产物（失败也保存）
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: stage-ipa
           path: pvz-hybrid-v*.ipa
