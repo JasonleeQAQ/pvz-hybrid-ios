@@ -251,11 +251,26 @@ jobs:
           ls "$TEMPLATES_DIR/"
 
       # ========== Godot Mono 构建流程：直接 dotnet build（跳过 godot --build-solutions，插件在 headless 下报错） ==========
+      - name: Remove test code and editor-only addons (GDRE artifacts)
+        run: |
+          set -euo pipefail
+          cd recovered
+          echo "=== Removing Tests/ ==="
+          rm -rf Tests/
+          echo "=== Removing editor-only addons with broken GDRE code ==="
+          rm -rf addons/AdobeAnimateEditor/
+          rm -rf addons/ModEditor/
+          echo "=== Remaining addons ==="
+          ls -d addons/*/ 2>/dev/null || echo "No addons"
+          echo "=== Size ==="
+          du -sh . | cut -f1
+          cd ..
+
       - name: Fix GDRE decompiled C# syntax issues
         run: |
           set -euo pipefail
           cd recovered
-          python3 ../.github/workflows/fix_gdre_syntax.py .
+          python3 ../.github/workflows/fix_gdre_syntax.py . --verbose
           cd ..
 
       - name: Build C# with dotnet
