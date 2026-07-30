@@ -269,8 +269,11 @@ jobs:
           # Test/ is the actual GDRE-recovered test directory (Note: NOT Tests/)
           echo "=== Removing Test/ and Tests/ ==="
           rm -rf Test/ Tests/
-          echo "=== Removing editor-only addons ==="
-          rm -rf addons/AdobeAnimateEditor/
+          # ModEditor: provides editor UI types (XWGenericVisualResourceEditor etc.)
+          # used ONLY in Test/ files which are already deleted above.
+          # AdobeAnimateEditor: provides runtime C# types (AdobeAnimateSprite/Part/Slot/Data etc.)
+          # used by core game scripts -- DO NOT delete.
+          echo "=== Removing ModEditor addon only ==="
           rm -rf addons/ModEditor/
           echo "=== Cleaning up broken plugin/autoload refs from project.godot ==="
           python3 ../.github/workflows/clean_project_godot.py project.godot
