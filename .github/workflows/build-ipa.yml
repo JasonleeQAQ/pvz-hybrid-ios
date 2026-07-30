@@ -265,7 +265,8 @@ jobs:
           if [ -f project.binary ] && [ ! -f project.godot ]; then
             echo "=== Converting project.binary to project.godot via Godot ==="
             # Run godot with the project path; it auto-converts binary to text on first open
-            timeout 30 godot --headless --path "$PWD" --quit 2>&1 || true
+            # macOS has no `timeout` command; use perl's alarm
+            perl -e 'alarm 30; exec @ARGV' godot --headless --path "$PWD" --quit 2>&1 || true
             if [ -f project.godot ]; then
               echo "project.godot generated successfully"
             else
@@ -295,23 +296,28 @@ jobs:
           fi
           cd ..
 
-      - name: Export Xcode project
+      - name: Export Xcode project (ignore xcodebuild failure, we build manually)
         run: |
           set -euo pipefail
           cd recovered
+          # Godot --export-release does two things:
+          #   1. Generate .xcodeproj (we need this)
+          #   2. Run xcodebuild archive (fails on unsigned builds due to signing conflict)
+          # We ignore step 2 failure and build manually ourselves.
           set +e
           set +o pipefail
           godot --headless --export-release "iOS" ../PlantsVsZombiesHybrid.xcodeproj 2>&1 | tail -30
           GODOT_EXIT=${PIPESTATUS[0]}
           set -e
           set -o pipefail
-          if [ "$GODOT_EXIT" -ne 0 ]; then
-            echo "ERROR: Godot export failed with exit code $GODOT_EXIT"
-            ls -la ../
-            exit "$GODOT_EXIT"
-          fi
           cd ..
-          ls PlantsVsZombiesHybrid.xcodeproj/ 2>/dev/null || ls | grep xcodeproj
+          if [ ! -d "PlantsVsZombiesHybrid.xcodeproj" ]; then
+            echo "ERROR: Godot failed to generate .xcodeproj (exit $GODOT_EXIT)"
+            ls -la
+            exit 1
+          fi
+          echo "xcodeproj generated (Godot exit=$GODOT_EXIT, xcodebuild archive failure is expected for unsigned builds)"
+          ls PlantsVsZombiesHybrid.xcodeproj/
           SCHEME=$(python3 .github/workflows/detect_scheme.py)
           echo "SCHEME=$SCHEME" >> $GITHUB_ENV
           echo "Detected scheme: $SCHEME"
