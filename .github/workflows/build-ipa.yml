@@ -53,7 +53,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          RELEASE_TAG="v${{ github.event.inputs.version }}"
+          RELEASE_TAG="v$(echo '${{ github.event.inputs.version }}' | sed 's/^v//')"
           gh release download "$RELEASE_TAG" --pattern "source.zip"
           ls -la source.zip
 
@@ -408,7 +408,7 @@ jobs:
           rm -rf ipa
           mkdir -p ipa/Payload
           cp -R "$APP" "ipa/Payload/$APP_BASENAME"
-          IPA_NAME="pvz-hybrid-v${{ github.event.inputs.version }}.ipa"
+          IPA_NAME="pvz-hybrid-v$(echo '${{ github.event.inputs.version }}' | sed 's/^v//').ipa"
           (cd ipa && zip -qry "../$IPA_NAME" Payload)
           if [ ! -f "$IPA_NAME" ]; then
             echo "ERROR: IPA creation failed"
@@ -430,7 +430,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PAT }}
         run: |
-          RELEASE_TAG="v${{ github.event.inputs.version }}"
+          RELEASE_TAG="v$(echo '${{ github.event.inputs.version }}' | sed 's/^v//')"
           if gh release view "$RELEASE_TAG" &>/dev/null; then
             echo "Release $RELEASE_TAG exists, uploading IPA..."
           else
