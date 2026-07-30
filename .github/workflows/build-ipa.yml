@@ -66,9 +66,9 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: recovered/
-          key: gdre-recovery-${{ runner.os }}-${{ steps.normver.outputs.raw }}-${{ steps.gdre-version-check.outputs.gdre_version }}
-          restore-keys: |
-            gdre-recovery-${{ runner.os }}-${{ steps.normver.outputs.raw }}-
+          # Bind recovery cache to this workflow commit so syntax-fixer changes
+          # can never reuse a previously mutated recovered/ tree.
+          key: gdre-recovery-v2-${{ runner.os }}-${{ steps.normver.outputs.raw }}-${{ steps.gdre-version-check.outputs.gdre_version }}-${{ github.sha }}
 
       # ========== 判断缓存是否真正生效（精确命中 或 restore-keys 拉到了 recovered/） ==========
       - name: 判断缓存是否有效
@@ -149,7 +149,7 @@ jobs:
         uses: actions/cache/save@v5
         with:
           path: recovered/
-          key: gdre-recovery-${{ runner.os }}-${{ steps.normver.outputs.raw }}-${{ steps.gdre-version-check.outputs.gdre_version }}
+          key: gdre-recovery-v2-${{ runner.os }}-${{ steps.normver.outputs.raw }}-${{ steps.gdre-version-check.outputs.gdre_version }}
 
       - name: 保存阶段1产物（失败也保存）
         if: always() && (steps.cache-valid.outputs.valid != 'true')
@@ -306,13 +306,26 @@ jobs:
           cd recovered
           CSPROJ=$(ls *.csproj | head -1)
           echo "Building $CSPROJ with dotnet..."
-          # Fix CS0165: initialize unassigned local variables (GDRE decompilation artifact)
-          python3 ../.github/workflows/fix_cs0165.py .
-          dotnet restore "$CSPROJ" 2>&1
-          dotnet build "$CSPROJ" -c Release 2>&1
+          # Keep GDRE output unchanged here. CS0165 is a compiler diagnostic that
+          # requires source/control-flow correction; heuristic bulk rewrites are unsafe.
+          dotnet restore "$CSPROJ" 2>&1 | tee dotnet-restore.log
+          dotnet build "$CSPROJ" -c Release 2>&1 | tee dotnet-build.log
           echo "=== Build output ==="
           ls -la bin/Release/*/ 2>/dev/null || echo "No bin/Release output"
           cd ..
+      - name: 保存 C# 编译诊断（失败也保存）
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: csharp-build-diagnostics
+          path: |
+            recovered/dotnet-restore.log
+            recovered/dotnet-build.log
+            recovered/PlantsVsZombies.csproj
+            recovered/project.godot
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Patch project.godot for iPad fullscreen (stretch=expand)
         run: |
           # Must run BEFORE export so settings are baked into xcodeproj
