@@ -281,6 +281,9 @@ jobs:
           # used by core game scripts -- DO NOT delete.
           echo "=== Removing ModEditor addon only ==="
           rm -rf addons/ModEditor/
+          # XWAdobeAnimateImportService.cs references PVZHE.ModEditor.FileSystem (from deleted ModEditor)
+          # It's an editor import tool, not runtime code — safe to remove.
+          rm -f addons/AdobeAnimateEditor/Tools/XWAdobeAnimateImportService.cs
           echo "=== Cleaning up broken plugin/autoload refs from project.godot ==="
           python3 ../.github/workflows/clean_project_godot.py project.godot
           echo "=== Remaining addons ==="
