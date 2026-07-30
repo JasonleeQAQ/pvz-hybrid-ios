@@ -45,6 +45,14 @@ jobs:
           echo "raw=$VER" >> "$GITHUB_OUTPUT"
           echo "Normalized version: $VER"
 
+      # ========== 先获取 GDRE 最新版本（用于缓存 key，确保版本升级后强制重新 recover） ==========
+      - name: 获取 GDRE 最新版本
+        id: gdre-version-check
+        run: |
+          GDRE_VER=$(curl -s https://api.github.com/repos/GDRETools/gdsdecomp/releases/latest | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['tag_name'])")
+          echo "gdre_version=$GDRE_VER" >> "$GITHUB_OUTPUT"
+          echo "GDRE latest: $GDRE_VER"
+
       # ========== 断点恢复：尝试拉取上次中间产物（force_recover=true 时跳过） ==========
       - name: 拉取阶段1-GDRE恢复产物
         if: ${{ !inputs.force_recover }}
@@ -52,9 +60,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: recovered/
-          key: gdre-recovery-${{ runner.os }}-${{ steps.normver.outputs.raw }}
+          key: gdre-recovery-${{ runner.os }}-${{ steps.normver.outputs.raw }}-${{ steps.gdre-version-check.outputs.gdre_version }}
           restore-keys: |
-            gdre-recovery-${{ runner.os }}-
+            gdre-recovery-${{ runner.os }}-${{ steps.normver.outputs.raw }}-
 
       # ========== 判断缓存是否真正生效（精确命中 或 restore-keys 拉到了 recovered/） ==========
       - name: 判断缓存是否有效
@@ -101,13 +109,16 @@ jobs:
           java-version: '17'
 
       - name: Install GDRE
+        id: gdre-install
         if: steps.cache-valid.outputs.valid != 'true'
         run: |
-          curl -L -o gdre-macos.zip "https://github.com/GDRETools/gdsdecomp/releases/download/v2.6.0/GDRE_tools-v2.6.0-macos.zip"
+          GDRE_VERSION="${{ steps.gdre-version-check.outputs.gdre_version }}"
+          echo "GDRE version: $GDRE_VERSION"
+          curl -L -o gdre-macos.zip "https://github.com/GDRETools/gdsdecomp/releases/download/${GDRE_VERSION}/GDRE_tools-${GDRE_VERSION}-macos.zip"
           unzip -q gdre-macos.zip -d gdre_extracted
           GDRE_BIN="gdre_extracted/Godot RE Tools.app/Contents/MacOS/Godot RE Tools"
           chmod +x "$GDRE_BIN"
-          echo "GDRE installed: $GDRE_BIN"
+          echo "GDRE installed: $GDRE_BIN ($GDRE_VERSION)"
           "$GDRE_BIN" --help 2>&1 | head -5 || true
 
       - name: Find and recover PCK
@@ -132,7 +143,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: recovered/
-          key: gdre-recovery-${{ runner.os }}-${{ steps.normver.outputs.raw }}
+          key: gdre-recovery-${{ runner.os }}-${{ steps.normver.outputs.raw }}-${{ steps.gdre-version-check.outputs.gdre_version }}
 
       - name: 保存阶段1产物（失败也保存）
         if: always() && (steps.cache-valid.outputs.valid != 'true')
@@ -208,7 +219,7 @@ jobs:
           # CDN 版本号去掉 .0（4.7.0-stable → 4.7-stable）
           GODOT_VER_CDN="${GODOT_VER%.0-stable}-stable"
           echo "Downloading Godot $GODOT_VER Mono (CDN: $GODOT_VER_CDN)"
-          curl -L -o godot.zip "https://godot-releases.nbg1.your-objectstorage.com/${GODOT_VER_CDN}/Godot_v${GODOT_VER_CDN}_mono_macos.universal.zip"
+          curl -L -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VER_CDN}/Godot_v${GODOT_VER_CDN}_mono_macos.universal.zip"
           unzip -q godot.zip -d godot_extracted
           mv godot_extracted/Godot_mono.app $HOME/Godot.app
           GODOT="$HOME/Godot.app/Contents/MacOS"
@@ -242,7 +253,7 @@ jobs:
           GODOT_VER="${{ steps.detect.outputs.godot_version }}"
           echo "Downloading export templates for Godot $GODOT_VER"
           GODOT_VER_CDN="${GODOT_VER%.0-stable}-stable"
-          curl -L -o templates.tpz "https://godot-releases.nbg1.your-objectstorage.com/${GODOT_VER_CDN}/Godot_v${GODOT_VER_CDN}_mono_export_templates.tpz"
+          curl -L -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VER_CDN}/Godot_v${GODOT_VER_CDN}_mono_export_templates.tpz"
           TEMPLATES_DIR="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VER}.mono"
           mkdir -p "$TEMPLATES_DIR"
           unzip -q templates.tpz -d /tmp/templates_extract
@@ -289,8 +300,14 @@ jobs:
         run: |
           set -euo pipefail
           cd recovered
+          # Temporarily disable errexit+pipefail so godot's exit code
+          # can be captured via PIPESTATUS even when godot fails.
+          set +e
+          set +o pipefail
           godot --headless --export-release "iOS" ../PlantsVsZombiesHybrid.xcodeproj 2>&1 | tail -30
           GODOT_EXIT=${PIPESTATUS[0]}
+          set -e
+          set -o pipefail
           if [ "$GODOT_EXIT" -ne 0 ]; then
             echo "ERROR: Godot export failed with exit code $GODOT_EXIT"
             ls -la ../
@@ -367,6 +384,8 @@ jobs:
           echo "Building with scheme: $SCHEME"
           xcodebuild -project PlantsVsZombiesHybrid.xcodeproj -list 2>&1 | head -20
 
+          set +e
+          set +o pipefail
           xcodebuild -project PlantsVsZombiesHybrid.xcodeproj \
             -scheme "$SCHEME" \
             -configuration Release \
@@ -377,6 +396,8 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO 2>&1 | tail -50
           XCODE_EXIT=${PIPESTATUS[0]}
+          set -e
+          set -o pipefail
           if [ "$XCODE_EXIT" -ne 0 ]; then
             echo "ERROR: xcodebuild failed with exit code $XCODE_EXIT"
             exit "$XCODE_EXIT"
@@ -463,7 +484,7 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: stage-ipa
-          path: pvz-hybrid.ipa
+          path: pvz-hybrid-v*.ipa
           retention-days: 7
 
       - name: Create Release and upload IPA
