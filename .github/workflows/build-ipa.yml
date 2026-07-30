@@ -254,7 +254,7 @@ jobs:
           echo "Downloading export templates for Godot $GODOT_VER"
           GODOT_VER_CDN="${GODOT_VER%.0-stable}-stable"
           curl -L -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VER_CDN}/Godot_v${GODOT_VER_CDN}_mono_export_templates.tpz"
-          TEMPLATES_DIR="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VER}.mono"
+          TEMPLATES_DIR="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VER/-/.}.mono"
           mkdir -p "$TEMPLATES_DIR"
           unzip -q templates.tpz -d /tmp/templates_extract
           cp -r /tmp/templates_extract/templates/* "$TEMPLATES_DIR/"
@@ -266,11 +266,32 @@ jobs:
         run: |
           set -euo pipefail
           cd recovered
-          echo "=== Removing Tests/ ==="
-          rm -rf Tests/
-          echo "=== Removing editor-only addons with broken GDRE code ==="
+          # Test/ is the actual GDRE-recovered test directory (Note: NOT Tests/)
+          echo "=== Removing Test/ and Tests/ ==="
+          rm -rf Test/ Tests/
+          echo "=== Removing editor-only addons ==="
           rm -rf addons/AdobeAnimateEditor/
           rm -rf addons/ModEditor/
+          echo "=== Cleaning up broken plugin/autoload refs from project.godot ==="
+          python3 - <<'PYEOF'
+import re, os
+path = "project.godot"
+if not os.path.exists(path):
+    print("project.godot not found, skipping")
+    exit(0)
+with open(path) as f:
+    content = f.read()
+# Remove enabled_plugins lines referencing deleted addons
+content = re.sub(r'^enabled_plugins=.*\n', '', content, flags=re.MULTILINE)
+# Remove autoload entries pointing to deleted addon paths
+content = re.sub(r'^[^=\n]+=.*addons/(AdobeAnimateEditor|ModEditor)/.*\n', '', content, flags=re.MULTILINE)
+# Remove [editor_plugins] section entries for deleted addons
+content = re.sub(r'\nadobeanimate[^\n]*', '', content, flags=re.IGNORECASE)
+content = re.sub(r'\nmodeditor[^\n]*', '', content, flags=re.IGNORECASE)
+with open(path, "w") as f:
+    f.write(content)
+print("project.godot plugin refs cleaned")
+PYEOF
           echo "=== Remaining addons ==="
           ls -d addons/*/ 2>/dev/null || echo "No addons"
           echo "=== Size ==="
@@ -296,6 +317,30 @@ jobs:
           echo "=== Build output ==="
           ls -la bin/Release/*/ 2>/dev/null || echo "No bin/Release output"
           cd ..
+      - name: Patch project.godot for iPad fullscreen (stretch=expand)
+        run: |
+          # Must run BEFORE export so settings are baked into xcodeproj
+          GODOT_FILE="recovered/project.godot"
+          if [ ! -f "$GODOT_FILE" ]; then
+            echo "WARNING: project.godot not found at $GODOT_FILE"
+            ls recovered/ | head -10
+            exit 0
+          fi
+          if ! grep -q '^\[display\]' "$GODOT_FILE"; then
+            echo "" >> "$GODOT_FILE"
+            echo "[display]" >> "$GODOT_FILE"
+          fi
+          sed -i '' '/^window\/stretch\/mode/d' "$GODOT_FILE"
+          sed -i '' '/^window\/stretch\/aspect/d' "$GODOT_FILE"
+          sed -i '' '/^window\/stretch\/scale/d' "$GODOT_FILE"
+          sed -i '' '/^window\/size\/viewport_width/d' "$GODOT_FILE"
+          sed -i '' '/^window\/size\/viewport_height/d' "$GODOT_FILE"
+          sed -i '' '/^window\/size\/window_width_override/d' "$GODOT_FILE"
+          sed -i '' '/^window\/size\/window_height_override/d' "$GODOT_FILE"
+          python3 .github/workflows/patch_godot_display.py
+          echo "=== Patched [display] section ==="
+          grep -A 10 '^\[display\]' "$GODOT_FILE" | head -15
+
       - name: Export Xcode project
         run: |
           set -euo pipefail
@@ -318,29 +363,6 @@ jobs:
           SCHEME=$(python3 .github/workflows/detect_scheme.py)
           echo "SCHEME=$SCHEME" >> $GITHUB_ENV
           echo "Detected scheme: $SCHEME"
-
-      - name: Patch project.godot for iPad fullscreen (stretch=expand)
-        run: |
-          GODOT_FILE="recovered/project.godot"
-          if [ ! -f "$GODOT_FILE" ]; then
-            echo "WARNING: project.godot not found at $GODOT_FILE"
-            ls recovered/ | head -10
-            exit 0
-          fi
-          if ! grep -q '^\[display\]' "$GODOT_FILE"; then
-            echo "" >> "$GODOT_FILE"
-            echo "[display]" >> "$GODOT_FILE"
-          fi
-          sed -i '' '/^window\/stretch\/mode/d' "$GODOT_FILE"
-          sed -i '' '/^window\/stretch\/aspect/d' "$GODOT_FILE"
-          sed -i '' '/^window\/stretch\/scale/d' "$GODOT_FILE"
-          sed -i '' '/^window\/size\/viewport_width/d' "$GODOT_FILE"
-          sed -i '' '/^window\/size\/viewport_height/d' "$GODOT_FILE"
-          sed -i '' '/^window\/size\/window_width_override/d' "$GODOT_FILE"
-          sed -i '' '/^window\/size\/window_height_override/d' "$GODOT_FILE"
-          python3 .github/workflows/patch_godot_display.py
-          echo "=== Patched [display] section ==="
-          grep -A 10 '^\[display\]' "$GODOT_FILE" | head -15
 
       - name: Fix signing conflict in project.pbxproj
         run: |
