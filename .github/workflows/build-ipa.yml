@@ -273,25 +273,7 @@ jobs:
           rm -rf addons/AdobeAnimateEditor/
           rm -rf addons/ModEditor/
           echo "=== Cleaning up broken plugin/autoload refs from project.godot ==="
-          python3 - <<'PYEOF'
-import re, os
-path = "project.godot"
-if not os.path.exists(path):
-    print("project.godot not found, skipping")
-    exit(0)
-with open(path) as f:
-    content = f.read()
-# Remove enabled_plugins lines referencing deleted addons
-content = re.sub(r'^enabled_plugins=.*\n', '', content, flags=re.MULTILINE)
-# Remove autoload entries pointing to deleted addon paths
-content = re.sub(r'^[^=\n]+=.*addons/(AdobeAnimateEditor|ModEditor)/.*\n', '', content, flags=re.MULTILINE)
-# Remove [editor_plugins] section entries for deleted addons
-content = re.sub(r'\nadobeanimate[^\n]*', '', content, flags=re.IGNORECASE)
-content = re.sub(r'\nmodeditor[^\n]*', '', content, flags=re.IGNORECASE)
-with open(path, "w") as f:
-    f.write(content)
-print("project.godot plugin refs cleaned")
-PYEOF
+          python3 ../.github/workflows/clean_project_godot.py project.godot
           echo "=== Remaining addons ==="
           ls -d addons/*/ 2>/dev/null || echo "No addons"
           echo "=== Size ==="
