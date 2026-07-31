@@ -435,16 +435,21 @@ jobs:
           set -euo pipefail
           cd recovered
           # Godot --export-release does two things:
-          #   1. Generate .xcodeproj (we need this)
+          #   1. Run dotnet publish (C# -> NativeAOT .aotdata) then generate .xcodeproj
           #   2. Run xcodebuild archive (fails on unsigned builds due to signing conflict)
-          # We ignore step 2 failure and build manually ourselves.
+          # We keep the FULL log so the publish stage is visible, then ignore step 2 failure.
           set +e
           set +o pipefail
-          godot --headless --export-release "iOS" ../PlantsVsZombiesHybrid.xcodeproj 2>&1 | tail -30
-          GODOT_EXIT=${PIPESTATUS[0]}
+          godot --headless --export-release "iOS" ../PlantsVsZombiesHybrid.xcodeproj > /tmp/godot_export.log 2>&1
+          GODOT_EXIT=$?
           set -e
           set -o pipefail
+          echo "======== Godot export: dotnet/publish/aot key lines ========"
+          grep -n -i "publish\|aotdata\|NativeAOT\|dotnet\|\.dll\b\|MSB\|error CS\|Failed to publish\|building solution" /tmp/godot_export.log | head -60 || true
+          echo "======== Godot export: last 50 lines ========"
+          tail -50 /tmp/godot_export.log
           cd ..
+          cp /tmp/godot_export.log ./godot_export.log || true
           if [ ! -d "PlantsVsZombiesHybrid.xcodeproj" ]; then
             echo "ERROR: Godot failed to generate .xcodeproj (exit $GODOT_EXIT)"
             ls -la
@@ -452,9 +457,22 @@ jobs:
           fi
           echo "xcodeproj generated (Godot exit=$GODOT_EXIT, xcodebuild archive failure is expected for unsigned builds)"
           ls PlantsVsZombiesHybrid.xcodeproj/
+          echo "======== C# artifacts in generated xcodeproj ========"
+          find PlantsVsZombiesHybrid.xcodeproj -name "*.aotdata" -o -name "*.dll" 2>/dev/null | head -20 || true
+          find recovered/bin -maxdepth 4 -name "*.aotdata" -o -maxdepth 4 -name "*.dll" 2>/dev/null | head -20 || true
+          echo "======== publish output dir ========"
+          ls -la recovered/bin/ExportRelease/ios-arm64/publish/ 2>/dev/null | head -30 || echo "no publish dir"
           SCHEME=$(python3 .github/workflows/detect_scheme.py)
           echo "SCHEME=$SCHEME" >> $GITHUB_ENV
           echo "Detected scheme: $SCHEME"
+
+      - name: Upload godot export log
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: godot-export-log
+          path: godot_export.log
+          retention-days: 7
 
       - name: Fix signing conflict in project.pbxproj
         run: |
@@ -508,12 +526,17 @@ jobs:
             build \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO 2>&1 | tail -50
-          XCODE_EXIT=${PIPESTATUS[0]}
+            CODE_SIGNING_ALLOWED=NO > /tmp/xcodebuild.log 2>&1
+          XCODE_EXIT=$?
           set -e
           set -o pipefail
+          echo "======== xcodebuild last 80 lines ========"
+          tail -80 /tmp/xcodebuild.log
+          cp /tmp/xcodebuild.log ./xcodebuild.log || true
           if [ "$XCODE_EXIT" -ne 0 ]; then
             echo "ERROR: xcodebuild failed with exit code $XCODE_EXIT"
+            echo "======== xcodebuild error lines ========"
+            grep -n -i "error:\|fatal\|BUILD FAILED\|Undefined\|ld:" /tmp/xcodebuild.log | tail -40 || true
             exit "$XCODE_EXIT"
           fi
 
@@ -603,6 +626,14 @@ jobs:
           fi
           echo "IPA_NAME=$IPA_NAME" >> $GITHUB_ENV
           ls -la "$IPA_NAME"
+
+      - name: Upload xcodebuild log
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: xcodebuild-log
+          path: xcodebuild.log
+          retention-days: 7
 
       - name: 保存阶段3产物（失败也保存）
         if: always()
