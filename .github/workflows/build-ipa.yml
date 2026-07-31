@@ -462,7 +462,7 @@ jobs:
           dotnet --version || true
           echo "=== manual publish (csproj validity + NativeAOT trigger) ==="
           set +e
-          timeout 900 dotnet publish PlantsVsZombies.csproj -c ExportRelease -r ios-arm64 --self-contained true -p:GodotTargetPlatform=iOS -o /tmp/publish-manual-test -v:m
+          dotnet publish PlantsVsZombies.csproj -c ExportRelease -r ios-arm64 --self-contained true -p:GodotTargetPlatform=iOS -o /tmp/publish-manual-test -v:m
           PUB_EXIT=$?
           set -e
           echo "PUBLISH_EXIT=$PUB_EXIT"
@@ -527,6 +527,9 @@ jobs:
       - name: Fix signing conflict in project.pbxproj
         run: |
           cd PlantsVsZombiesHybrid.xcodeproj
+          # 先修复 Godot 生成的 pbxproj 语法（files 数组缺逗号等），否则后续
+          # sed / fix_frameworks.py 修改后 xcodebuild 会报 parse error
+          python3 ../.github/workflows/fix_pbxproj_syntax.py project.pbxproj || true
           sed -i '' 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = "Manual";/g' project.pbxproj
           sed -i '' 's/CODE_SIGN_STYLE = "Automatic";/CODE_SIGN_STYLE = "Manual";/g' project.pbxproj
           sed -i '' 's/CODE_SIGN_IDENTITY = "[^"]*";/CODE_SIGN_IDENTITY = "";/g' project.pbxproj
@@ -542,7 +545,7 @@ jobs:
       - name: Fix missing framework links (Metal/QuartzCore/CoreAudio)
         run: |
           cd PlantsVsZombiesHybrid.xcodeproj
-          python3 ../.github/workflows/fix_frameworks.py || true
+          python3 ../.github/workflows/fix_frameworks.py
           echo "=== Verify frameworks in pbxproj ==="
           grep -c "Metal.framework" project.pbxproj || true
           grep -c "QuartzCore.framework" project.pbxproj || true
