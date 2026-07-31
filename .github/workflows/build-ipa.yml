@@ -338,6 +338,30 @@ jobs:
           else
             echo "No project.godot, display patch skipped (using project.binary)"
           fi
+          # ===== 关键修复：删除旧 project.binary =====
+          # GDRE 提取的 project.binary 是原版配置（1080x600 / keep_height）。
+          # Godot 加载项目时优先读 project.binary，导致上面 patch 的
+          # project.godot 根本不被使用，显示配置永远不生效。
+          # 删除后 Godot 只读 patch 后的 project.godot，导出/打包时
+          # 生成的 project.binary 才会包含 iPad 全屏配置。
+          if [ -f project.binary ]; then
+            echo "=== Removing original project.binary (use patched project.godot) ==="
+            rm -f project.binary
+          fi
+          # ===== 备份纹理导入缓存 =====
+          # 完整纹理在 .godot/imported/（3683 个 ctex，~478MB）。
+          # 后续 Godot export 可能把源文件缺失的资源当作无效缓存清理，
+          # 备份到 /tmp，打包完整 pck 前恢复。
+          if [ -d .godot/imported ]; then
+            IMP_COUNT=$(find .godot/imported -type f | wc -l | tr -d ' ')
+            echo "=== Backing up .godot/imported ($IMP_COUNT files) ==="
+            rm -rf /tmp/imported_backup
+            mkdir -p /tmp/imported_backup
+            cp -R .godot/imported /tmp/imported_backup/
+            echo "imported backup done: $(du -sh /tmp/imported_backup | cut -f1)"
+          else
+            echo "WARNING: no .godot/imported found at backup time"
+          fi
           cd ..
 
       # ===== dll 流程：生成 C# 项目，复用 source.zip 预编译 IL 程序集 =====
@@ -653,6 +677,48 @@ jobs:
           fi
           echo ""
           echo "=== Integrity check PASSED ==="
+
+          # ========== 完整资源 pck：PCKPacker 纯复制打包 ==========
+          # Godot 重导出生成的 pck 只有文本资源（源纹理缺失 -> 导入失败 ->
+          # 纹理全丢，IPA 只有 60MB 跑不起来）。正确做法：
+          #   1. 恢复 .godot/imported 纹理缓存（从 25 步骤的备份）
+          #   2. 从 xcodebuild 生成的 pck 提取 patch 后的 project.binary
+          #      （25 步骤删除了旧 binary，Godot 现在用 patch 后的
+          #       project.godot 生成，显示配置是 iPad 全屏）
+          #   3. PCKPacker 纯复制 recovered/ 全部文件 -> complete.pck
+          #   4. 替换 .app 里的 pck（Godot 生成的残缺版）
+          echo "=== Restore .godot/imported texture cache ==="
+          if [ -d /tmp/imported_backup/imported ]; then
+            mkdir -p recovered/.godot
+            rm -rf recovered/.godot/imported
+            cp -R /tmp/imported_backup/imported recovered/.godot/
+            echo "restored: $(find recovered/.godot/imported -type f | wc -l | tr -d ' ') files, $(du -sh recovered/.godot/imported | cut -f1)"
+          else
+            echo "WARNING: no imported backup found, check 25-step backup"
+          fi
+
+          echo "=== Extract patched project.binary from built pck ==="
+          APP_PCK=$(find "$APP" -maxdepth 1 -name "*.pck" | head -1)
+          if [ -z "$APP_PCK" ]; then
+            echo "ERROR: no pck found in $APP"
+            exit 1
+          fi
+          echo "Built pck: $APP_PCK ($(du -sh "$APP_PCK" | cut -f1))"
+          python3 .github/workflows/extract_project_binary.py "$APP_PCK" /tmp/project_patched.binary
+
+          echo "=== PCKPacker: build complete pck (keep textures) ==="
+          (
+            cd recovered
+            godot --headless -s ../.github/workflows/pack_pck.gd
+          )
+          ls -la /tmp/complete.pck
+
+          echo "=== Verify complete pck ==="
+          python3 .github/workflows/verify_pck.py /tmp/complete.pck
+
+          echo "=== Replace pck in .app ==="
+          cp /tmp/complete.pck "$APP_PCK"
+          ls -la "$APP_PCK"
 
           APP_BASENAME=$(basename "$APP")
           rm -rf ipa
