@@ -348,30 +348,56 @@ jobs:
         run: |
           set -euo pipefail
           cd recovered
-          PREBUILT_DLL=$(ls .prebuilt/*.dll 2>/dev/null | grep -v GodotSharp | head -1 || true)
-          if [ -z "$PREBUILT_DLL" ]; then
-            echo "ERROR: no prebuilt game assembly in recovered/.prebuilt/ (dll flow requires source.zip data_* dir)"
-            exit 1
-          fi
-          ASSEMBLY=$(basename "$PREBUILT_DLL" .dll)
-          echo "Prebuilt assembly: $ASSEMBLY"
           SDK_VERSION="${{ steps.detect.outputs.godot_version }}"
           SDK_VERSION="${SDK_VERSION%-stable}"
           echo "Godot.NET.Sdk version: $SDK_VERSION"
 
-          # 对齐 project.godot 的 assembly_name（Godot 运行时按它加载程序集）
-          if [ -f project.godot ]; then
-            if grep -q '^dotnet/project/assembly_name' project.godot; then
-              sed -i '' "s|^dotnet/project/assembly_name=.*|dotnet/project/assembly_name=\"$ASSEMBLY\"|" project.godot
-            else
-              echo "dotnet/project/assembly_name=\"$ASSEMBLY\"" >> project.godot
-            fi
-            echo "assembly_name set: $ASSEMBLY"
-          fi
+          python3 - "$SDK_VERSION" <<'PYEOF'
+          import sys, uuid, glob, os, re
+          sdk = sys.argv[1]
 
-          python3 - "$ASSEMBLY" "$SDK_VERSION" <<'PYEOF'
-          import sys, uuid
-          asm, sdk = sys.argv[1], sys.argv[2]
+          # 1) 选游戏主程序集：优先 PlantsVsZombies.dll；否则排除框架/第三方 dll 后取第一个
+          dlls = sorted(glob.glob(".prebuilt/*.dll"))
+          exclude_prefix = ("GodotSharp", "System", "Microsoft", "netstandard", "ZLogger", "ZString", "Utf8")
+          game = next((d for d in dlls if os.path.basename(d).startswith("PlantsVsZombies.")), None)
+          if game is None:
+              game = next((d for d in dlls if not os.path.basename(d).startswith(exclude_prefix)), None)
+          if game is None:
+              print("ERROR: no prebuilt game assembly in recovered/.prebuilt/ (dll flow requires source.zip data_* dir)")
+              sys.exit(1)
+          asm = os.path.basename(game)[:-4]
+          print(f"Prebuilt assembly: {asm}")
+
+          # 2) assembly_name 必须位于 project.godot 的 [dotnet] 节，否则 Godot 不识别 .NET 项目、跳过 publish
+          if os.path.exists("project.godot"):
+              with open("project.godot") as f:
+                  text = f.read()
+              lines = text.splitlines()
+              out, in_dotnet = [], False
+              for ln in lines:
+                  if ln.lstrip().startswith("["):
+                      in_dotnet = (ln.strip() == "[dotnet]")
+                  if re.match(r'^\s*dotnet/project/assembly_name\s*=', ln) and not in_dotnet:
+                      continue  # 删除之前 append 错位的行
+                  out.append(ln)
+              text = "\n".join(out)
+              if re.search(r'^\s*dotnet/project/assembly_name\s*=', text, re.M):
+                  text = re.sub(r'^\s*dotnet/project/assembly_name\s*=.*$',
+                                f'dotnet/project/assembly_name="{asm}"', text, count=1, flags=re.M)
+              else:
+                  text = text.rstrip() + f'\n\n[dotnet]\n\nproject/assembly_name="{asm}"\n'
+              with open("project.godot", "w") as f:
+                  f.write(text)
+              print(f"project.godot [dotnet] assembly_name={asm}")
+
+          # 3) 最小 csproj：不编译源码；引用依赖 dll（排除自身避免自引用冲突）；把全部预编译 dll 复制进输出
+          refs = []
+          for d in dlls:
+              if os.path.abspath(d) == os.path.abspath(game):
+                  continue
+              fn = os.path.basename(d)[:-4]
+              refs.append(f'    <Reference Include="{fn}">\n        <HintPath>{d}</HintPath>\n        <Private>true</Private>\n    </Reference>')
+          ref_xml = "\n".join(refs)
           csproj = f'''<Project Sdk="Godot.NET.Sdk/{sdk}">
             <PropertyGroup>
               <TargetFramework>net9.0</TargetFramework>
@@ -385,14 +411,11 @@ jobs:
               <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
             </PropertyGroup>
             <ItemGroup>
-              <_PrebuiltDll Include=".prebuilt/*.dll" />
-              <Reference Include="@(_PrebuiltDll-&gt;'%(Filename)')">
-                <HintPath>%(_PrebuiltDll.FullPath)</HintPath>
-                <Private>true</Private>
-              </Reference>
+          {ref_xml}
+              <PrebuiltDll Include=".prebuilt/*.dll" />
             </ItemGroup>
             <Target Name="CopyPrebuiltDlls" AfterTargets="CoreCompile">
-              <Copy SourceFiles="@(_PrebuiltDll)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="false" />
+              <Copy SourceFiles="@(PrebuiltDll)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="false" />
             </Target>
           </Project>
           '''
@@ -423,7 +446,7 @@ jobs:
               f.write(csproj)
           with open(f"{asm}.sln", "w") as f:
               f.write(sln)
-          print("Generated:")
+          print("=== Generated files ===")
           print(csproj)
           PYEOF
           echo "=== Generated files ==="
@@ -461,7 +484,14 @@ jobs:
           find PlantsVsZombiesHybrid.xcodeproj -name "*.aotdata" -o -name "*.dll" 2>/dev/null | head -20 || true
           find recovered/bin -maxdepth 4 -name "*.aotdata" -o -maxdepth 4 -name "*.dll" 2>/dev/null | head -20 || true
           echo "======== publish output dir ========"
-          ls -la recovered/bin/ExportRelease/ios-arm64/publish/ 2>/dev/null | head -30 || echo "no publish dir"
+          if [ -d "recovered/bin/ExportRelease/ios-arm64/publish/" ]; then
+            ls -la recovered/bin/ExportRelease/ios-arm64/publish/ | head -30
+            echo "--- aotdata count ---"
+            find recovered/bin/ExportRelease/ios-arm64/publish/ -name "*.aotdata" | wc -l
+          else
+            echo "ERROR: no publish dir — Godot did not run dotnet publish (check [dotnet] section in project.godot)"
+            exit 1
+          fi
           SCHEME=$(python3 .github/workflows/detect_scheme.py)
           echo "SCHEME=$SCHEME" >> $GITHUB_ENV
           echo "Detected scheme: $SCHEME"
