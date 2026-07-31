@@ -709,7 +709,8 @@ jobs:
           echo "=== PCKPacker: build complete pck (keep textures) ==="
           (
             cd recovered
-            godot --headless -s ../.github/workflows/pack_pck.gd
+            # 注意：-s 脚本路径必须是绝对路径（相对路径会被解析成 res:// 越界）
+            godot --headless -s "$GITHUB_WORKSPACE/.github/workflows/pack_pck.gd"
           )
           ls -la /tmp/complete.pck
 

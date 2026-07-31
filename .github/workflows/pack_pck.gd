@@ -26,10 +26,10 @@ func _init() -> void:
 		push_error("cannot open current dir")
 		quit(1)
 		return
+	var cwd: String = root.get_current_dir()
 	_collect(root, "", files)
 
 	var count := 0
-	var cwd := DirAccess.get_current_dir()
 	for rel in files:
 		var res_path := "res://" + rel
 		if _skip(rel):
