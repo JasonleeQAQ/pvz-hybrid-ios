@@ -453,6 +453,28 @@ jobs:
           ls -la *.csproj *.sln
           cd ..
 
+      - name: Manual dotnet publish verification
+        run: |
+          set -euo pipefail
+          cd recovered
+          echo "=== dotnet info ==="
+          which dotnet || echo "dotnet not in PATH"
+          dotnet --version || true
+          echo "=== manual publish (csproj validity + NativeAOT trigger) ==="
+          set +e
+          timeout 900 dotnet publish PlantsVsZombies.csproj -c ExportRelease -r ios-arm64 --self-contained true -p:GodotTargetPlatform=iOS -o /tmp/publish-manual-test -v:m
+          PUB_EXIT=$?
+          set -e
+          echo "PUBLISH_EXIT=$PUB_EXIT"
+          if [ -d /tmp/publish-manual-test ]; then
+            echo "=== publish output ==="
+            ls -la /tmp/publish-manual-test/ | head -40
+            echo "--- aotdata ---"
+            find /tmp/publish-manual-test -name "*.aotdata" | head -20
+          else
+            echo "no publish output dir"
+          fi
+
       - name: Export Xcode project (ignore xcodebuild failure, we build manually)
         run: |
           set -euo pipefail
@@ -463,12 +485,12 @@ jobs:
           # We keep the FULL log so the publish stage is visible, then ignore step 2 failure.
           set +e
           set +o pipefail
-          godot --headless --export-release "iOS" ../PlantsVsZombiesHybrid.xcodeproj > /tmp/godot_export.log 2>&1
+          godot --headless --verbose --export-release "iOS" ../PlantsVsZombiesHybrid.xcodeproj > /tmp/godot_export.log 2>&1
           GODOT_EXIT=$?
           set -e
           set -o pipefail
           echo "======== Godot export: dotnet/publish/aot key lines ========"
-          grep -n -i "publish\|aotdata\|NativeAOT\|dotnet\|\.dll\b\|MSB\|error CS\|Failed to publish\|building solution" /tmp/godot_export.log | head -60 || true
+          grep -n -i "publish\|aotdata\|NativeAOT\|dotnet\|\.dll\b\|MSB\|error CS\|Failed to publish\|building solution\|Running:\|GodotTargetPlatform\|ExportRelease-ios" /tmp/godot_export.log | head -80 || true
           echo "======== Godot export: last 50 lines ========"
           tail -50 /tmp/godot_export.log
           cd ..
@@ -481,17 +503,15 @@ jobs:
           echo "xcodeproj generated (Godot exit=$GODOT_EXIT, xcodebuild archive failure is expected for unsigned builds)"
           ls PlantsVsZombiesHybrid.xcodeproj/
           echo "======== C# artifacts in generated xcodeproj ========"
-          find PlantsVsZombiesHybrid.xcodeproj -name "*.aotdata" -o -name "*.dll" 2>/dev/null | head -20 || true
-          find recovered/bin -maxdepth 4 -name "*.aotdata" -o -maxdepth 4 -name "*.dll" 2>/dev/null | head -20 || true
-          echo "======== publish output dir ========"
-          if [ -d "recovered/bin/ExportRelease/ios-arm64/publish/" ]; then
-            ls -la recovered/bin/ExportRelease/ios-arm64/publish/ | head -30
-            echo "--- aotdata count ---"
-            find recovered/bin/ExportRelease/ios-arm64/publish/ -name "*.aotdata" | wc -l
-          else
-            echo "ERROR: no publish dir — Godot did not run dotnet publish (check [dotnet] section in project.godot)"
-            exit 1
-          fi
+          find PlantsVsZombiesHybrid.xcodeproj -name "*.aotdata" -o -name "*.dll" -o -name "*.xcframework" 2>/dev/null | head -20 || true
+          echo "======== Godot 4.7 publish output dir (.godot/mono/temp/bin) ========"
+          find recovered/.godot/mono/temp/bin -maxdepth 4 -type d 2>/dev/null | head -30 || true
+          echo "--- publish artifacts (dll/dylib/aotdata) ---"
+          find recovered/.godot/mono/temp/bin -name "*.dll" -o -name "*.dylib" -o -name "*.aotdata" 2>/dev/null | head -40 || true
+          echo "--- xcframework ---"
+          find recovered/.godot/mono/temp/bin -name "*.xcframework" 2>/dev/null | head -10 || true
+          AOT_COUNT=$(find recovered/.godot/mono/temp/bin -name "*.aotdata" 2>/dev/null | wc -l | tr -d ' ')
+          echo "aotdata_count=$AOT_COUNT"
           SCHEME=$(python3 .github/workflows/detect_scheme.py)
           echo "SCHEME=$SCHEME" >> $GITHUB_ENV
           echo "Detected scheme: $SCHEME"
