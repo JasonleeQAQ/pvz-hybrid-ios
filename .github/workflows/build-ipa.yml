@@ -147,6 +147,30 @@ jobs:
           echo "=== project.godot exists? ==="
           test -f recovered/project.godot && echo "YES" || echo "NO"
 
+          # ===== dll 流程：收集 source.zip 中的预编译 IL 程序集 =====
+          # PCK 只含资源（C# 脚本是 1 字节空占位，不可编译）。
+          # 游戏程序集在 Windows 自包含发布目录 data_* 中，为 net9.0 IL dll，
+          # 可直接被 Godot iOS NativeAOT 消费，无需编译任何 .cs 源码。
+          mkdir -p recovered/.prebuilt
+          DLL_SRC=$(find extracted -maxdepth 3 -type d -name "data_*" | head -1)
+          if [ -n "$DLL_SRC" ]; then
+            echo "Prebuilt dll dir: $DLL_SRC"
+            for f in "$DLL_SRC"/*.dll; do
+              [ -f "$f" ] || continue
+              b=$(basename "$f")
+              case "$b" in
+                System.*|System.Private*|Microsoft.CodeAnalysis*|Microsoft.DiaSymReader*|GodotSharp.dll|GodotSharpEditor.dll|coreclr*|clr*.dll|hostfxr*|hostpolicy*|mscor*|msquic*|System.IO.Compression.Native*|System.Security.Cryptography.Native*|*.resources.dll)
+                  echo "SKIP runtime/framework: $b" ;;
+                *)
+                  cp "$f" recovered/.prebuilt/
+                  echo "COPY prebuilt: $b" ;;
+              esac
+            done
+            ls -la recovered/.prebuilt/
+          else
+            echo "WARNING: no data_* dir found — prebuilt dll flow unavailable"
+          fi
+
       # ========== 强制保存阶段1缓存 ==========
       - name: 强制保存阶段1缓存
         id: save-stage1
@@ -181,6 +205,19 @@ jobs:
           echo "godot_version=$GODOT_STABLE" >> $GITHUB_OUTPUT
           echo "godot_cache_key=godot-${GODOT_STABLE}-${{ runner.os }}" >> $GITHUB_OUTPUT
           echo "Godot: $GODOT_STABLE"
+
+      # ===== dll 流程前置：C# NativeAOT 工具链 =====
+      # 预编译 dll 复用依赖 dotnet publish + iOS workload 的 ilc，
+      # 没有它们 Godot Mono iOS 导出会静默失败（历史 run 已证实）。
+      - name: Setup .NET SDK for AOT compilation
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Install .NET iOS Workload
+        run: |
+          dotnet workload install ios
+          echo ".NET iOS workload installed."
 
       - name: Generate export_presets.cfg
         run: |
@@ -259,14 +296,21 @@ jobs:
       - name: Convert project.binary to project.godot and patch display
         run: |
           cd recovered
-          # GDRE --extract outputs project.binary (ECFG format).
-          # Godot can read it, but we need project.godot for text-based patching.
-          # Use Godot headless to open the project — it will generate project.godot.
+          # GDRE --extract outputs project.binary (ECFG binary format).
+          # Godot can read it, but text patching requires project.godot.
+          # Reliable conversion: ProjectSettings.save() writes loaded settings back as text.
           if [ -f project.binary ] && [ ! -f project.godot ]; then
             echo "=== Converting project.binary to project.godot via Godot ==="
-            # Run godot with the project path; it auto-converts binary to text on first open
-            # macOS has no `timeout` command; use perl's alarm
-            perl -e 'alarm 30; exec @ARGV' godot --headless --path "$PWD" --quit 2>&1 || true
+            cat > convert_settings.gd <<'EOF'
+          extends SceneTree
+          func _init():
+              ProjectSettings.save()
+              print("project.godot saved")
+              quit()
+          EOF
+            # macOS has no `timeout` command; use perl's alarm (120s for big projects)
+            perl -e 'alarm 120; exec @ARGV' godot --headless --path "$PWD" --script convert_settings.gd 2>&1 || true
+            rm -f convert_settings.gd
             if [ -f project.godot ]; then
               echo "project.godot generated successfully"
             else
@@ -288,12 +332,102 @@ jobs:
             sed -i '' '/^window\/size\/viewport_height/d' project.godot
             sed -i '' '/^window\/size\/window_width_override/d' project.godot
             sed -i '' '/^window\/size\/window_height_override/d' project.godot
-            python3 ../.github/workflows/patch_godot_display.py
+            python3 ../.github/workflows/patch_godot_display.py project.godot
             echo "=== Patched [display] section ==="
             grep -A 10 '^\[display\]' project.godot | head -15
           else
             echo "No project.godot, display patch skipped (using project.binary)"
           fi
+          cd ..
+
+      # ===== dll 流程：生成 C# 项目，复用 source.zip 预编译 IL 程序集 =====
+      # extract 模式的 .cs 是 1 字节空占位，编译必然失败（历史 3870 错误）。
+      # 正确做法：生成最小 csproj（不编译任何源码），CoreCompile 后把
+      # .prebuilt/ 的 net9.0 IL dll 复制进输出目录，NativeAOT 直接编译它们。
+      - name: Generate C# project (reuse prebuilt dlls)
+        run: |
+          set -euo pipefail
+          cd recovered
+          PREBUILT_DLL=$(ls .prebuilt/*.dll 2>/dev/null | grep -v GodotSharp | head -1 || true)
+          if [ -z "$PREBUILT_DLL" ]; then
+            echo "ERROR: no prebuilt game assembly in recovered/.prebuilt/ (dll flow requires source.zip data_* dir)"
+            exit 1
+          fi
+          ASSEMBLY=$(basename "$PREBUILT_DLL" .dll)
+          echo "Prebuilt assembly: $ASSEMBLY"
+          SDK_VERSION="${{ steps.detect.outputs.godot_version }}"
+          SDK_VERSION="${SDK_VERSION%-stable}"
+          echo "Godot.NET.Sdk version: $SDK_VERSION"
+
+          # 对齐 project.godot 的 assembly_name（Godot 运行时按它加载程序集）
+          if [ -f project.godot ]; then
+            if grep -q '^dotnet/project/assembly_name' project.godot; then
+              sed -i '' "s|^dotnet/project/assembly_name=.*|dotnet/project/assembly_name=\"$ASSEMBLY\"|" project.godot
+            else
+              echo "dotnet/project/assembly_name=\"$ASSEMBLY\"" >> project.godot
+            fi
+            echo "assembly_name set: $ASSEMBLY"
+          fi
+
+          python3 - "$ASSEMBLY" "$SDK_VERSION" <<'PYEOF'
+          import sys, uuid
+          asm, sdk = sys.argv[1], sys.argv[2]
+          csproj = f'''<Project Sdk="Godot.NET.Sdk/{sdk}">
+            <PropertyGroup>
+              <TargetFramework>net9.0</TargetFramework>
+              <EnableDynamicLoading>true</EnableDynamicLoading>
+              <RootNamespace>{asm}</RootNamespace>
+              <AssemblyName>{asm}</AssemblyName>
+              <Nullable>disable</Nullable>
+              <ImplicitUsings>disable</ImplicitUsings>
+              <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+              <NoWarn>CS2008</NoWarn>
+              <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+            </PropertyGroup>
+            <ItemGroup>
+              <_PrebuiltDll Include=".prebuilt/*.dll" />
+              <Reference Include="@(_PrebuiltDll-&gt;'%(Filename)')">
+                <HintPath>%(_PrebuiltDll.FullPath)</HintPath>
+                <Private>true</Private>
+              </Reference>
+            </ItemGroup>
+            <Target Name="CopyPrebuiltDlls" AfterTargets="CoreCompile">
+              <Copy SourceFiles="@(_PrebuiltDll)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="false" />
+            </Target>
+          </Project>
+          '''
+          guid = str(uuid.uuid4()).upper()
+          sln = f'''Microsoft Visual Studio Solution File, Format Version 12.00
+          # Visual Studio Version 17
+          VisualStudioVersion = 17.0.31903.59
+          MinimumVisualStudioVersion = 10.0.40219.1
+          Project("{{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}}") = "{asm}", "{asm}.csproj", "{{{guid}}}"
+          EndProject
+          Global
+          \tGlobalSection(SolutionConfigurationPlatforms) = preSolution
+          \t\tDebug|Any CPU = Debug|Any CPU
+          \t\tExportDebug|Any CPU = ExportDebug|Any CPU
+          \t\tExportRelease|Any CPU = ExportRelease|Any CPU
+          \tEndGlobalSection
+          \tGlobalSection(ProjectConfigurationPlatforms) = postSolution
+          \t\t{{{guid}}}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+          \t\t{{{guid}}}.Debug|Any CPU.Build.0 = Debug|Any CPU
+          \t\t{{{guid}}}.ExportDebug|Any CPU.ActiveCfg = ExportDebug|Any CPU
+          \t\t{{{guid}}}.ExportDebug|Any CPU.Build.0 = ExportDebug|Any CPU
+          \t\t{{{guid}}}.ExportRelease|Any CPU.ActiveCfg = ExportRelease|Any CPU
+          \t\t{{{guid}}}.ExportRelease|Any CPU.Build.0 = ExportRelease|Any CPU
+          \tEndGlobalSection
+          EndGlobal
+          '''
+          with open(f"{asm}.csproj", "w") as f:
+              f.write(csproj)
+          with open(f"{asm}.sln", "w") as f:
+              f.write(sln)
+          print("Generated:")
+          print(csproj)
+          PYEOF
+          echo "=== Generated files ==="
+          ls -la *.csproj *.sln
           cd ..
 
       - name: Export Xcode project (ignore xcodebuild failure, we build manually)
@@ -421,8 +555,19 @@ jobs:
           if [ "$AOT_COUNT" -gt 0 ]; then
             HAS_AOTDATA=true
             echo "  [PASS] Found $AOT_COUNT .aotdata files"
+            find "$APP" -name "*.aotdata" | head -5
           else
             echo "  [WARN] No .aotdata files (may be OK for non-AOT builds)"
+          fi
+
+          # dll 流程验证：用了预编译 dll 时，NativeAOT 必须产出 .aotdata
+          if [ -d "recovered/.prebuilt" ]; then
+            PREBUILT_COUNT=$(ls recovered/.prebuilt/*.dll 2>/dev/null | wc -l)
+            echo "  [dll-flow] Prebuilt dlls: $PREBUILT_COUNT"
+            if [ "$AOT_COUNT" -eq 0 ]; then
+              echo "  [FAIL] Prebuilt dll flow active but NativeAOT produced no .aotdata"
+              exit 1
+            fi
           fi
 
           GS_COUNT=$(find "$APP" -name "*GodotSharp*" 2>/dev/null | wc -l)

@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """Patch project.godot [display] section for iPad fullscreen (stretch=expand)."""
 import re
+import sys
+import os
 
-PATH = "recovered/project.godot"
+# Accept project.godot path as arg (default: ./project.godot)
+PATH = sys.argv[1] if len(sys.argv) > 1 else "project.godot"
+if not os.path.exists(PATH):
+    print(f"project.godot not found at {PATH}, skipping patch")
+    sys.exit(0)
 
 with open(PATH) as f:
     content = f.read()
@@ -40,4 +46,4 @@ content = content.replace("[display]\n", "[display]\n" + stretch_lines, 1)
 with open(PATH, "w") as f:
     f.write(content)
 
-print("Patched [display] section")
+print(f"Patched [display] section in {PATH}")
