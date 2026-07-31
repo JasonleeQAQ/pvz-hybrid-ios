@@ -709,6 +709,17 @@ jobs:
           echo "=== PCKPacker: build complete pck (keep textures) ==="
           (
             cd recovered
+            # 用 find 生成文件列表（find 包含隐藏文件；GDScript DirAccess
+            # 遍历在 4.7 下会跳过 .godot/ 或报参数错误，绕开它）
+            find . -type f | sed 's|^\./||' \
+              | grep -v '^\.prebuilt/' \
+              | grep -v '^\.godot/mono/' \
+              | grep -v '^\.godot/tmp/' \
+              | grep -v '^\.godot/editor/' \
+              | grep -v '^project\.binary$' \
+              > /tmp/pck_filelist.txt
+            echo "filelist: $(wc -l < /tmp/pck_filelist.txt | tr -d ' ') files"
+            echo "imported in list: $(grep -c '^\.godot/imported/' /tmp/pck_filelist.txt | tr -d ' ') files"
             # 注意：-s 脚本路径必须是绝对路径（相对路径会被解析成 res:// 越界）
             godot --headless -s "$GITHUB_WORKSPACE/.github/workflows/pack_pck.gd"
           )
