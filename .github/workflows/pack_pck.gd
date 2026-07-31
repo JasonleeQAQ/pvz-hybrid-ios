@@ -61,7 +61,9 @@ func _init() -> void:
 
 
 func _collect(dir: DirAccess, prefix: String, out: Array[String]) -> void:
-	dir.list_dir_begin()
+	# 注意：Godot 4 list_dir_begin 默认 skip_hidden=true！
+	# 必须显式传 (false, false)，否则 .godot/（含 imported 纹理缓存）整目录被跳过。
+	dir.list_dir_begin(false, false)
 	var name := dir.get_next()
 	while name != "":
 		if name == "." or name == "..":

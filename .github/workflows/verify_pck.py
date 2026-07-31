@@ -31,6 +31,7 @@ def main():
         size_imported = 0
         has_pb = False
         total_size = 0
+        pb_data = None
         for _ in range(count):
             slen = struct.unpack("<I", f.read(4))[0]
             path = f.read(slen).decode("utf-8", errors="replace").rstrip("\x00")
@@ -42,6 +43,10 @@ def main():
             total_size += size
             if path == "project.binary":
                 has_pb = True
+                f_cur = f.tell()
+                f.seek(file_base + ofs)
+                pb_data = f.read(size)
+                f.seek(f_cur)
             if ".godot/imported/" in path:
                 n_imported += 1
                 size_imported += size
@@ -65,6 +70,31 @@ def main():
     if total_mb < 400:
         print(f"FAIL: only {total_mb:.1f} MB (expected >= 400 MB)")
         ok = False
+
+    # 校验 project.binary 显示配置（iPad 全屏 patch 生效）
+    if has_pb and pb_data:
+        want = [
+            (b"window/stretch/mode", b"canvas_items"),
+            (b"window/stretch/aspect", b"expand"),
+            (b"window/size/viewport_width", None),  # 值在二进制中，不直接搜
+            (b"window/size/viewport_height", None),
+        ]
+        for key, val in want:
+            if key not in pb_data:
+                print(f"FAIL: project.binary missing key {key.decode()}")
+                ok = False
+            elif val is not None:
+                # ECFG: key + 长度前缀 + value，检查 key 后 40 字节内含 val
+                idx = pb_data.find(key)
+                window = pb_data[idx: idx + 60]
+                if val not in window:
+                    print(f"FAIL: project.binary {key.decode()} != {val.decode()} (found {window[-30:]})")
+                    ok = False
+                else:
+                    print(f"  OK: project.binary {key.decode()}={val.decode()}")
+        if b"keep_height" in pb_data:
+            print("FAIL: project.binary still contains keep_height (old config!)")
+            ok = False
 
     if ok:
         print("VERIFY_OK")
