@@ -603,64 +603,51 @@ jobs:
           echo "APP found: $APP"
           ls -la "$APP" | head -5
 
-          # ========== 完整性验证：检查 C# 运行时 ==========
-          echo "=== Integrity check: C# runtime ==="
-          HAS_FRAMEWORKS=false
-          HAS_DLL=false
-          HAS_AOTDATA=false
-          HAS_GODOTSHARP=false
+          # ========== 完整性验证：检查 C# NativeAOT 产物 ==========
+          # Godot 4.7 iOS .NET 导出流程：
+          #   dotnet publish (NativeAOT) -> PlantsVsZombies.dylib -> PlantsVsZombies_aot.xcframework
+          #   -> xcodebuild 嵌入为 Frameworks/PlantsVsZombies.framework
+          # 因此 app 内没有 .dll / .aotdata / GodotSharp 是正常现象（IL 已编译为原生代码）。
+          echo "=== Integrity check: C# NativeAOT runtime ==="
+          HAS_AOT_FRAMEWORK=false
 
           if [ -d "$APP/Frameworks" ]; then
-            HAS_FRAMEWORKS=true
             echo "  [PASS] Frameworks/ exists"
             ls "$APP/Frameworks/"
+            # C# NativeAOT 代码载体：PlantsVsZombies.framework
+            if [ -d "$APP/Frameworks/PlantsVsZombies.framework" ]; then
+              HAS_AOT_FRAMEWORK=true
+              echo "  [PASS] PlantsVsZombies.framework found (C# NativeAOT code embedded)"
+            else
+              echo "  [WARN] PlantsVsZombies.framework not found in Frameworks/"
+            fi
           else
             echo "  [FAIL] No Frameworks/ directory"
           fi
 
           DLL_COUNT=$(find "$APP" -name "*.dll" 2>/dev/null | wc -l)
           if [ "$DLL_COUNT" -gt 0 ]; then
-            HAS_DLL=true
-            echo "  [PASS] Found $DLL_COUNT .dll files"
+            echo "  [WARN] Found $DLL_COUNT .dll files (unexpected for NativeAOT, IL should be compiled)"
             find "$APP" -name "*.dll" | head -5
           else
-            echo "  [FAIL] No .dll files found"
+            echo "  [INFO] No .dll files (expected for NativeAOT)"
           fi
 
           AOT_COUNT=$(find "$APP" -name "*.aotdata" 2>/dev/null | wc -l)
           if [ "$AOT_COUNT" -gt 0 ]; then
-            HAS_AOTDATA=true
-            echo "  [PASS] Found $AOT_COUNT .aotdata files"
+            echo "  [INFO] Found $AOT_COUNT .aotdata files"
             find "$APP" -name "*.aotdata" | head -5
           else
-            echo "  [WARN] No .aotdata files (may be OK for non-AOT builds)"
+            echo "  [INFO] No .aotdata files (expected: Godot 4.7 uses dylib/xcframework, not .aotdata)"
           fi
 
-          # dll 流程验证：用了预编译 dll 时，NativeAOT 必须产出 .aotdata
-          if [ -d "recovered/.prebuilt" ]; then
-            PREBUILT_COUNT=$(ls recovered/.prebuilt/*.dll 2>/dev/null | wc -l)
-            echo "  [dll-flow] Prebuilt dlls: $PREBUILT_COUNT"
-            if [ "$AOT_COUNT" -eq 0 ]; then
-              echo "  [FAIL] Prebuilt dll flow active but NativeAOT produced no .aotdata"
-              exit 1
-            fi
-          fi
-
-          GS_COUNT=$(find "$APP" -name "*GodotSharp*" 2>/dev/null | wc -l)
-          if [ "$GS_COUNT" -gt 0 ]; then
-            HAS_GODOTSHARP=true
-            echo "  [PASS] Found GodotSharp references"
-          else
-            echo "  [FAIL] No GodotSharp found"
-          fi
-
-          # 关键检查：必须有 Frameworks 或 .dll（Godot Mono 导出必须二者之一）
-          if [ "$HAS_FRAMEWORKS" = false ] && [ "$HAS_DLL" = false ]; then
+          # 关键检查：必须存在 C# NativeAOT framework（C# 代码被打包的证据）
+          if [ "$HAS_AOT_FRAMEWORK" = false ]; then
             echo ""
             echo "============================================"
-            echo "INTEGRITY CHECK FAILED: No C# runtime found!"
-            echo "Neither Frameworks/ nor .dll files exist."
-            echo "This IPA will crash on launch."
+            echo "INTEGRITY CHECK FAILED: No C# NativeAOT framework found!"
+            echo "Frameworks/PlantsVsZombies.framework missing."
+            echo "This IPA will crash on launch (no C# runtime)."
             echo "============================================"
             exit 1
           fi
