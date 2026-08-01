@@ -30,14 +30,18 @@ if "[display]" not in content:
     content += "\n[display]\n"
 
 # Append stretch/viewport settings under [display]
+# 关键：Godot 的 viewport_width/height 用【逻辑分辨率 points】，不是物理像素。
+# iPad 13,4 逻辑分辨率 = 1194x834（物理 2388x1668，scale=2）。
+# 之前误用物理像素 2388x1668 导致游戏内容缩小到 1/4、UI 极小、触摸坐标错位。
+# 用逻辑分辨率 1194x834 + stretch/aspect=expand 让内容铺满全屏且 UI 正常。
 stretch_lines = (
     "window/stretch/mode=\"canvas_items\"\n"
     "window/stretch/aspect=\"expand\"\n"
     "window/stretch/scale=\"1.0\"\n"
-    "window/size/viewport_width=2388\n"
-    "window/size/viewport_height=1668\n"
-    "window/size/window_width_override=2388\n"
-    "window/size/window_height_override=1668\n"
+    "window/size/viewport_width=1194\n"
+    "window/size/viewport_height=834\n"
+    "window/size/window_width_override=1194\n"
+    "window/size/window_height_override=834\n"
 )
 
 # Insert right after [display]
