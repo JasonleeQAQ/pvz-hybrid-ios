@@ -790,22 +790,22 @@ jobs:
             UIDCACHE_SIZE=$(stat -f%z recovered/.godot/uid_cache.bin 2>/dev/null || stat -c%s recovered/.godot/uid_cache.bin)
             echo "uid_cache.bin rebuilt: ${UIDCACHE_SIZE} bytes"
             python3 - "$GITHUB_WORKSPACE/recovered/.godot/uid_cache.bin" <<'PYEOF'
-            import struct, sys
-            fn = sys.argv[1]
-            data = open(fn, 'rb').read()
-            count = struct.unpack('<I', data[:4])[0]
-            off = 4
-            for i in range(min(count, 3)):
-                id_ = struct.unpack('<q', data[off:off+8])[0]
-                ln = struct.unpack('<i', data[off+8:off+12])[0]
-                path = data[off+12:off+12+ln].decode('utf-8', errors='replace')
-                print(f'  [{i}] id={id_} len={ln} path={path[:60]}')
-                off += 12 + ln
-            print(f'uid_cache entries: {count}')
-            if count < 9000:
-                print('ERROR: uid_cache suspiciously small, abort')
-                sys.exit(1)
-            PYEOF
+          import struct, sys
+          fn = sys.argv[1]
+          data = open(fn, 'rb').read()
+          count = struct.unpack('<I', data[:4])[0]
+          off = 4
+          for i in range(min(count, 3)):
+              id_ = struct.unpack('<q', data[off:off+8])[0]
+              ln = struct.unpack('<i', data[off+8:off+12])[0]
+              path = data[off+12:off+12+ln].decode('utf-8', errors='replace')
+              print(f'  [{i}] id={id_} len={ln} path={path[:60]}')
+              off += 12 + ln
+          print(f'uid_cache entries: {count}')
+          if count < 9000:
+              print('ERROR: uid_cache suspiciously small, abort')
+              sys.exit(1)
+          PYEOF
           else
             echo "ERROR: uid_cache.bin rebuild failed"
             exit 1
