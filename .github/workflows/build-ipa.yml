@@ -433,12 +433,18 @@ jobs:
               <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
               <NoWarn>CS2008</NoWarn>
               <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+              <PublishTrimmed>false</PublishTrimmed>
             </PropertyGroup>
             <ItemGroup>
           {ref_xml}
               <PrebuiltDll Include=".prebuilt/*.dll" />
+              <TrimmerRootAssembly Include="{asm}" />
             </ItemGroup>
-            <Target Name="CopyPrebuiltDlls" AfterTargets="CoreCompile">
+            <Target Name="CopyPrebuiltDlls" AfterTargets="CoreCompile" BeforeTargets="ILCompiler">
+              <!-- 用真游戏 dll 覆盖编译空壳：必须先覆盖 obj（IntermediateOutputPath），
+                   否则 CopyFilesToOutputDirectory 会从 obj 把空壳复制到 bin 覆盖真 dll；
+                   再覆盖 TargetDir 兜底，确保 ILC（NativeAOT）读取到的是含游戏类的真程序集 -->
+              <Copy SourceFiles="@(PrebuiltDll)" DestinationFolder="$(IntermediateOutputPath)" SkipUnchangedFiles="false" />
               <Copy SourceFiles="@(PrebuiltDll)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="false" />
             </Target>
           </Project>
@@ -675,6 +681,25 @@ jobs:
             echo "============================================"
             exit 1
           fi
+
+          # 关键检查：dylib 里必须真有游戏代码（防止空壳程序集再次通过）
+          # 历史踩坑：csproj EnableDefaultCompileItems=false + 无 Compile 项 ->
+          # ILC 编译的是空壳程序集，dylib 只有 GodotSharp 桥接，游戏类为 0，
+          # 运行时找不到 C# 脚本类 -> 卡第一屏。
+          DYLIB_BIN=$(find "$APP/Frameworks/PlantsVsZombies.framework" -type f -maxdepth 2 | head -1)
+          echo "  [INFO] Checking game symbols in: $DYLIB_BIN"
+          GAME_SYMBOL_COUNT=$(strings "$DYLIB_BIN" 2>/dev/null | grep -c -E "CoinBank|TowerDefense|PlantsVsZombies\." || true)
+          if [ "$GAME_SYMBOL_COUNT" -lt 5 ]; then
+            echo ""
+            echo "============================================"
+            echo "INTEGRITY CHECK FAILED: NativeAOT dylib has no game code!"
+            echo "strings found only $GAME_SYMBOL_COUNT game symbols."
+            echo "Game classes were trimmed/never compiled -> app hangs on first screen."
+            echo "============================================"
+            exit 1
+          fi
+          echo "  [PASS] dylib contains game code ($GAME_SYMBOL_COUNT game symbols)"
+
           echo ""
           echo "=== Integrity check PASSED ==="
 
