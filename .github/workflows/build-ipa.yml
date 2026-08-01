@@ -335,6 +335,48 @@ jobs:
             python3 ../.github/workflows/patch_godot_display.py project.godot
             echo "=== Patched [display] section ==="
             grep -A 10 '^\[display\]' project.godot | head -15
+            # ===== 关键修复：main_scene 从 uid:// 改为 res:// text path =====
+            # GDRE 提取后场景/脚本 UID 被重新分配，与 .godot/uid_cache.bin 不一致，
+            # 运行时 ResourceUID 查不到 main_scene 的 uid -> 卡 load startup。
+            # 改 text path 彻底绕开 UID 解析主场景（uid_cache 重建是另一道保险）。
+            echo "=== main_scene uid -> text path ==="
+            python3 - <<'PYEOF'
+          import re
+          p = 'project.godot'
+          with open(p) as f:
+              c = f.read()
+          m = re.search(r'run/main_scene="(uid://[a-z0-9]+)"', c)
+          if m:
+              uid = m.group(1)
+              print(f"main_scene currently: {uid}")
+              # 通过 ext_resource/场景头部把 uid 解析到路径：
+              # 最简单可靠：查找 .tscn 文件头部声明该 uid 的文件
+              import os
+              target = None
+              for dirpath, dirnames, filenames in os.walk('.'):
+                  for fn in filenames:
+                      if fn.endswith('.tscn'):
+                          full = os.path.join(dirpath, fn)
+                          try:
+                              head = open(full, errors='replace').read(2000)
+                              if f'uid="{uid}"' in head.split('\n')[0]:
+                                  target = 'res://' + os.path.relpath(full, '.').replace(os.sep, '/')
+                                  break
+                          except Exception:
+                              pass
+                  if target:
+                      break
+              if target:
+                  c2 = c.replace(m.group(0), f'run/main_scene="{target}"')
+                  with open(p, 'w') as f:
+                      f.write(c2)
+                  print(f"main_scene -> {target}")
+              else:
+                  print("WARNING: cannot resolve main_scene uid to tscn path, leaving as-is")
+          else:
+              print("main_scene not uid form or not found")
+          PYEOF
+            grep -n '^run/main_scene' project.godot || true
           else
             echo "No project.godot, display patch skipped (using project.binary)"
           fi
@@ -727,6 +769,20 @@ jobs:
             echo "restored: $(find recovered/.godot/imported -type f | wc -l | tr -d ' ') files, $(du -sh recovered/.godot/imported | cut -f1)"
           else
             echo "WARNING: no imported backup found, check 25-step backup"
+          fi
+
+          # ===== 修复 uid_cache.bin =====
+          # GDRE 提取时给场景/脚本重新分配了 UID，但 recovered/.godot/uid_cache.bin
+          # 是原版 pck 保留的旧缓存（旧 UID）。两者不一致 -> 运行时
+          # main_scene 的 uid:// 无法解析 -> 卡 load startup。
+          # 重建缓存：以 recovered 中资源文件实际声明的 UID 为准。
+          echo "=== Rebuild uid_cache.bin ==="
+          python3 ../.github/workflows/fix_uid_cache.py recovered
+          if [ -f recovered/.godot/uid_cache.bin ]; then
+            echo "uid_cache.bin rebuilt: $(stat -f%z recovered/.godot/uid_cache.bin 2>/dev/null || stat -c%s recovered/.godot/uid_cache.bin) bytes"
+          else
+            echo "ERROR: uid_cache.bin rebuild failed"
+            exit 1
           fi
 
           echo "=== Extract patched project.binary from built pck ==="
