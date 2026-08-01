@@ -793,8 +793,18 @@ jobs:
           # miss 2 个编辑器插件，不影响运行）。
           # 不依赖原版 bin：workflow 自己生成正确缓存，下次无原版也能跑。
           # base 由探测到的 Godot 版本决定（4.x -> 34），换版本自动适配。
-          echo "=== Rebuild uid_cache.bin (v3: text_to_id accepts 0-9) ==="
-          python3 "$GITHUB_WORKSPACE/.github/workflows/fix_uid_cache.py" "$GITHUB_WORKSPACE/recovered" --base 34
+          # 不硬编码：从 steps.detect 的 godot_version 推导 base。
+          # Godot UID base 由引擎写死（resource_uid.cpp），4.x 全系 = 34。
+          # 未来若 Godot 改 base，只需在此映射表加一行。
+          GODOT_VERSION_RAW="${{ steps.detect.outputs.godot_version }}"  # 形如 4.7.0-stable
+          GODOT_VERSION_MAJOR="${GODOT_VERSION_RAW%%.*}"                 # 取主版本号 4
+          GODOT_MAJOR="${GODOT_VERSION_MAJOR:-4}"
+          case "$GODOT_MAJOR" in
+            4) UID_BASE=34 ;;
+            *) UID_BASE=34 ;;  # 未知版本默认 34（Godot 4.x 兼容）
+          esac
+          echo "=== Rebuild uid_cache.bin (v3: text_to_id accepts 0-9, base=$UID_BASE) ==="
+          python3 "$GITHUB_WORKSPACE/.github/workflows/fix_uid_cache.py" "$GITHUB_WORKSPACE/recovered" --base "$UID_BASE"
           if [ -f recovered/.godot/uid_cache.bin ]; then
             UIDCACHE_SIZE=$(stat -f%z recovered/.godot/uid_cache.bin 2>/dev/null || stat -c%s recovered/.godot/uid_cache.bin)
             echo "uid_cache.bin rebuilt: ${UIDCACHE_SIZE} bytes"
