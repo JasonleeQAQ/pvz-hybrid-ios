@@ -777,7 +777,8 @@ jobs:
           # main_scene 的 uid:// 无法解析 -> 卡 load startup。
           # 重建缓存：以 recovered 中资源文件实际声明的 UID 为准。
           echo "=== Rebuild uid_cache.bin ==="
-          python3 ../.github/workflows/fix_uid_cache.py recovered
+          # cwd 是仓库根（$GITHUB_WORKSPACE），recovered/ 在其下
+          python3 "$GITHUB_WORKSPACE/.github/workflows/fix_uid_cache.py" "$GITHUB_WORKSPACE/recovered"
           if [ -f recovered/.godot/uid_cache.bin ]; then
             echo "uid_cache.bin rebuilt: $(stat -f%z recovered/.godot/uid_cache.bin 2>/dev/null || stat -c%s recovered/.godot/uid_cache.bin) bytes"
           else
