@@ -210,7 +210,7 @@ jobs:
       # 预编译 dll 复用依赖 dotnet publish + iOS workload 的 ilc，
       # 没有它们 Godot Mono iOS 导出会静默失败（历史 run 已证实）。
       - name: Setup .NET SDK for AOT compilation
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '9.0.x'
 
@@ -433,7 +433,8 @@ jobs:
               <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
               <NoWarn>CS2008</NoWarn>
               <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
-              <PublishTrimmed>false</PublishTrimmed>
+              <!-- NativeAOT 隐含 PublishTrimmed=true，禁止显式 false（会导致 publish 失败，
+                   历史 run 30678810153 证实）。防裁剪靠 TrimmerRootAssembly 下方 -->
             </PropertyGroup>
             <ItemGroup>
           {ref_xml}
