@@ -684,10 +684,16 @@ jobs:
           fi
 
           # 关键检查：dylib 里必须真有游戏代码（防止空壳程序集再次通过）
-          # 历史踩坑：csproj EnableDefaultCompileItems=false + 无 Compile 项 ->
+          # 历史踩坑1：csproj EnableDefaultCompileItems=false + 无 Compile 项 ->
           # ILC 编译的是空壳程序集，dylib 只有 GodotSharp 桥接，游戏类为 0，
           # 运行时找不到 C# 脚本类 -> 卡第一屏。
-          DYLIB_BIN=$(find "$APP/Frameworks/PlantsVsZombies.framework" -type f -maxdepth 2 | head -1)
+          # 历史踩坑2：find ... | head -1 会命中 Info.plist（字典序最前），
+          # strings 检查 plist 恒为 0 符号误报 fail（run 30679131605 实证）。
+          # 正确做法：排除 plist/dSYM，用 file 命令挑真正的 Mach-O 二进制。
+          DYLIB_BIN=$(find "$APP/Frameworks/PlantsVsZombies.framework" -type f -maxdepth 2 ! -name "Info.plist" ! -path "*/dSYM/*" -exec file {} \; 2>/dev/null | grep -i "Mach-O" | head -1 | cut -d: -f1)
+          if [ -z "$DYLIB_BIN" ]; then
+            DYLIB_BIN=$(find "$APP/Frameworks/PlantsVsZombies.framework" -type f -maxdepth 2 ! -name "Info.plist" | head -1)
+          fi
           echo "  [INFO] Checking game symbols in: $DYLIB_BIN"
           GAME_SYMBOL_COUNT=$(strings "$DYLIB_BIN" 2>/dev/null | grep -c -E "CoinBank|TowerDefense|PlantsVsZombies\." || true)
           if [ "$GAME_SYMBOL_COUNT" -lt 5 ]; then
