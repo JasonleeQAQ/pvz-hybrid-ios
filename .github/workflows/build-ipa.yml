@@ -334,6 +334,20 @@ jobs:
 
       - name: Convert project.binary to project.godot and patch display
         run: |
+          # ===== 备份原版 uid_cache.bin（决定性修复 v5） =====
+          # step 12 从原版 pck 提取的 uid_cache.bin（12349 条，含音频等二进制
+          # 资源 UID）保存在 recovered/.godot/uid_cache.bin。但本 step 及 step 28
+          # 的 Godot 操作会重新扫描项目并重写该文件，覆盖原版缓存（实测掉到
+          # 8175 条），导致 step 33 重建时音频 UID 丢失。因此在任何 Godot 操作
+          # 之前，先把原版缓存备份到 /tmp（同一 job 内跨 step 持久）。
+          # 缓存路径（命中 step 6 缓存）下 recovered/.godot/uid_cache.bin 也是
+          # step 13 保存的原版，同样在此备份，覆盖两条路径。
+          if [ -f recovered/.godot/uid_cache.bin ]; then
+            cp recovered/.godot/uid_cache.bin /tmp/orig_uid_cache.bin
+            echo "backed up original uid_cache.bin -> /tmp/orig_uid_cache.bin ($(stat -f%z /tmp/orig_uid_cache.bin 2>/dev/null || stat -c%s /tmp/orig_uid_cache.bin) bytes)"
+          else
+            echo "WARNING: no recovered/.godot/uid_cache.bin to back up"
+          fi
           cd recovered
           # GDRE --extract outputs project.binary (ECFG binary format).
           # Godot can read it, but text patching requires project.godot.
@@ -838,6 +852,18 @@ jobs:
             *) UID_BASE=34 ;;  # 未知版本默认 34（Godot 4.x 兼容）
           esac
           echo "=== Rebuild uid_cache.bin (v4: merge original + GDRE new, base=$UID_BASE) ==="
+          # ===== 恢复原版 uid_cache.bin（决定性修复 v5） =====
+          # step 25/28 的 Godot 操作已把 recovered/.godot/uid_cache.bin 从原版
+          # 12349 条覆盖成 Godot 重扫描的 ~8175 条，音频等二进制资源 UID 丢失。
+          # 从 step 25 前的备份恢复原版缓存，作为 fix_uid_cache.py 的合并基础，
+          # 确保音频 UID 不丢。若备份不存在（异常路径），退回使用当前文件。
+          if [ -f /tmp/orig_uid_cache.bin ]; then
+            mkdir -p recovered/.godot
+            cp /tmp/orig_uid_cache.bin recovered/.godot/uid_cache.bin
+            echo "restored original uid_cache.bin from /tmp/orig_uid_cache.bin ($(stat -f%z recovered/.godot/uid_cache.bin 2>/dev/null || stat -c%s recovered/.godot/uid_cache.bin) bytes)"
+          else
+            echo "WARNING: /tmp/orig_uid_cache.bin not found, using current recovered/.godot/uid_cache.bin"
+          fi
           # 备份 GDRE 提取的原版缓存（fix_uid_cache.py 会读取它做合并基础）
           if [ -f recovered/.godot/uid_cache.bin ]; then
             ORIG_UIDCACHE_SIZE=$(stat -f%z recovered/.godot/uid_cache.bin 2>/dev/null || stat -c%s recovered/.godot/uid_cache.bin)
@@ -862,10 +888,24 @@ jobs:
               print(f'  [{i}] id={id_} len={ln} path={path[:60]}')
               off += 12 + ln
           print(f'uid_cache entries: {count}')
-          # v4：合并后应 >= 原版 12743 条（含音频等资源 UID）。若 < 9000 说明
-          # 原版缓存丢失且扫描不全，音频 UID 会缺失 -> 按钮不跳转，必须中止。
-          if count < 9000:
-              print('ERROR: uid_cache suspiciously small, abort')
+          # v4/v5：合并后应 >= 原版条目数（含音频等资源 UID）。
+          # fix_uid_cache.py 以原版缓存为基础合并，原版条目全部保留，
+          # 因此重建后条目数必须 >= 原版条目数。若原版备份存在但重建后
+          # 反而更少，说明原版缓存丢失/被污染，音频 UID 会缺失 ->
+          # 按钮不跳转，必须中止。
+          import os
+          orig_count = None
+          if os.path.exists('/tmp/orig_uid_cache.bin'):
+              od = open('/tmp/orig_uid_cache.bin', 'rb').read()
+              if len(od) >= 4:
+                  orig_count = struct.unpack('<I', od[:4])[0]
+          if orig_count is not None:
+              if count < orig_count:
+                  print(f'ERROR: rebuilt uid_cache ({count}) < original ({orig_count}), original cache lost/corrupted, abort')
+                  sys.exit(1)
+              print(f'  [PASS] rebuilt >= original ({orig_count})')
+          elif count < 9000:
+              print('ERROR: uid_cache suspiciously small (<9000), original cache unavailable, abort')
               sys.exit(1)
           PYEOF
           else
