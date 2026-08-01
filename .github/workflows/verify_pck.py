@@ -75,7 +75,10 @@ def main():
     if has_pb and pb_data:
         want = [
             (b"window/stretch/mode", b"canvas_items"),
-            (b"window/stretch/aspect", b"expand"),
+            # aspect 当前方案为 ignore（iPad 全屏非均匀拉伸，无黑边/蓝白背景）。
+            # 历史曾用 expand（4:3 视口下方 1/4 露蓝白背景），已废弃。
+            # 若未来改回 expand，此处需同步。
+            (b"window/stretch/aspect", b"ignore"),
             (b"window/size/viewport_width", None),  # 值在二进制中，不直接搜
             (b"window/size/viewport_height", None),
         ]

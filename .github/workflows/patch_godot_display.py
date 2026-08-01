@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Patch project.godot [display] section for iPad fullscreen (stretch=expand)."""
+"""Patch project.godot [display] section for iPad fullscreen (stretch=ignore)."""
 import re
 import sys
 import os
