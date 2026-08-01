@@ -771,18 +771,39 @@ jobs:
             echo "WARNING: no imported backup found, check 25-step backup"
           fi
 
-          # ===== 修复 uid_cache.bin =====
-          # GDRE 提取时给场景/脚本重新分配了 UID，但 recovered/.godot/uid_cache.bin
-          # 是原版 pck 保留的旧缓存（旧 UID）。两者不一致 -> 运行时
-          # main_scene 的 uid:// 无法解析 -> 卡 load startup。
-          # 重建缓存：以 recovered 中资源文件实际声明的 UID 为准。
-          echo "=== Rebuild uid_cache.bin ==="
-          # cwd 是仓库根（$GITHUB_WORKSPACE），recovered/ 在其下
-          python3 "$GITHUB_WORKSPACE/.github/workflows/fix_uid_cache.py" "$GITHUB_WORKSPACE/recovered"
+          # ===== 安装原版 uid_cache.bin（决定性修复） =====
+          # 历史根因：GDRE 提取后 recovered/.godot/uid_cache.bin 不存在或为空，
+          # 旧 fix_uid_cache.py 用 BASE=32 重建（Godot 实际 BASE=34），
+          # 全部 UID 编码错位 -> 运行时 108 个 skipped unresolved -> 卡 load startup。
+          # 正确做法：直接用原版 pck 的 uid_cache.bin（12743 条，仓库 assets 固定文件），
+          # 已实证 GDRE 不重写场景 UID，原版缓存覆盖 8090/8091 个场景引用 UID。
+          # Godot --export 可能重新生成 uid_cache.bin，这里在打包前强制覆盖。
+          echo "=== Install original uid_cache.bin ==="
+          mkdir -p recovered/.godot
+          cp "$GITHUB_WORKSPACE/assets/original_uid_cache.bin" recovered/.godot/uid_cache.bin
           if [ -f recovered/.godot/uid_cache.bin ]; then
-            echo "uid_cache.bin rebuilt: $(stat -f%z recovered/.godot/uid_cache.bin 2>/dev/null || stat -c%s recovered/.godot/uid_cache.bin) bytes"
+            UIDCACHE_SIZE=$(stat -f%z recovered/.godot/uid_cache.bin 2>/dev/null || stat -c%s recovered/.godot/uid_cache.bin)
+            echo "uid_cache.bin: ${UIDCACHE_SIZE} bytes"
+            python3 - "$GITHUB_WORKSPACE/recovered/.godot/uid_cache.bin" <<'PYEOF'
+            import struct, sys
+            fn = sys.argv[1]
+            data = open(fn, 'rb').read()
+            count = struct.unpack('<I', data[:4])[0]
+            # 校验格式：读取前 3 条
+            off = 4
+            for i in range(min(count, 3)):
+                id_ = struct.unpack('<q', data[off:off+8])[0]
+                ln = struct.unpack('<i', data[off+8:off+12])[0]
+                path = data[off+12:off+12+ln].decode('utf-8', errors='replace')
+                print(f'  [{i}] id={id_} len={ln} path={path[:60]}')
+                off += 12 + ln
+            print(f'uid_cache entries: {count}')
+            if count < 12000:
+                print('ERROR: uid_cache suspiciously small, abort')
+                sys.exit(1)
+            PYEOF
           else
-            echo "ERROR: uid_cache.bin rebuild failed"
+            echo "ERROR: uid_cache.bin missing"
             exit 1
           fi
 
@@ -805,6 +826,7 @@ jobs:
               | grep -v '^\.godot/mono/' \
               | grep -v '^\.godot/tmp/' \
               | grep -v '^\.godot/editor/' \
+              | grep -v '\.uid$' \
               | grep -v '^project\.binary$' \
               > /tmp/pck_filelist.txt
             echo "filelist: $(wc -l < /tmp/pck_filelist.txt | tr -d ' ') files"

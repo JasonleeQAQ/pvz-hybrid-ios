@@ -21,7 +21,10 @@ import re
 import sys
 
 CHARS = 'abcdefghijklmnopqrstuvwxyz012345678'
-BASE = 32
+# Godot resource_uid.cpp: char_count = ('z'-'a') = 25, base = 25 + ('9'-'0') = 34。
+# 历史 bug：BASE 曾写成 32 + 数字偏移 26，导致所有 UID 编码成错误 id，
+# 运行时 ResourceUID 查不到 -> 108 个 skipped unresolved UID -> 卡 load startup。
+BASE = 34
 
 HEAD_RE = re.compile(r'\[gd_(?:scene|resource)[^\]]*?uid="(uid://[a-z0-9]+)"')
 EXT_RE = re.compile(r'\[ext_resource[^\]]*?uid="(uid://[a-z0-9]+)"[^\]]*?path="(res://[^"]+)"')
@@ -37,7 +40,7 @@ def text_to_id(t):
         if 'a' <= ch <= 'z':
             uid += ord(ch) - ord('a')
         elif '0' <= ch <= '8':
-            uid += ord(ch) - ord('0') + 26
+            uid += ord(ch) - ord('0') + 25
         else:
             return None
     return uid & 0x7FFFFFFFFFFFFFFF
