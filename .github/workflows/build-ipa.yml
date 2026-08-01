@@ -159,6 +159,12 @@ jobs:
               [ -f "$f" ] || continue
               b=$(basename "$f")
               case "$b" in
+                # System.IO.Hashing 是游戏实际依赖的第三方 NuGet 包（ZLogger 哈希用），
+                # 必须以 System. 开头但绝不能排除，否则 NativeAOT 缺它 -> 运行时
+                # FileNotFoundException -> ResourceManager.Load() 卡死（卡加载地图 37/37）。
+                System.IO.Hashing.dll)
+                  cp "$f" recovered/.prebuilt/
+                  echo "COPY prebuilt (third-party, keep): $b" ;;
                 System.*|System.Private*|Microsoft.CodeAnalysis*|Microsoft.DiaSymReader*|GodotSharp.dll|GodotSharpEditor.dll|coreclr*|clr*.dll|hostfxr*|hostpolicy*|mscor*|msquic*|System.IO.Compression.Native*|System.Security.Cryptography.Native*|*.resources.dll)
                   echo "SKIP runtime/framework: $b" ;;
                 *)
@@ -482,6 +488,9 @@ jobs:
           {ref_xml}
               <PrebuiltDll Include=".prebuilt/*.dll" />
               <TrimmerRootAssembly Include="{asm}" />
+              <!-- System.IO.Hashing 经 ZLogger 反射/延迟加载使用，NativeAOT 静态分析
+                   发现不了，必须 TrimmerRootAssembly 强制保留，否则运行时找不到 -->
+              <TrimmerRootAssembly Include="System.IO.Hashing" />
             </ItemGroup>
             <Target Name="CopyPrebuiltDlls" AfterTargets="CoreCompile" BeforeTargets="ILCompiler">
               <!-- 用真游戏 dll 覆盖编译空壳：必须先覆盖 obj（IntermediateOutputPath），
