@@ -10,31 +10,40 @@
   旧版误用 '0' <= ch <= '8'，导致含 '9' 的 UID（如 uid://b6c3n8q2v5m9d）
   被当作非法字符丢弃，场景引用这些 UID 时无法解析 -> 卡 load startup。
 
-用法：python3 fix_uid_cache.py <recovered_dir>
+base 跟随引擎版本（v4）：
+  UID 编码的 base 由 Godot 引擎决定（resource_uid.cpp 里写死），
+  不是由项目数据决定。Godot 4.x 全系 base=34。
+  workflow 探测到引擎版本后通过 --base 传入：
+    - Godot 4.x -> base=34
+  未传时默认 base=34（Godot 4.x）。
+
+用法：python3 fix_uid_cache.py <recovered_dir> [--base N]
 """
 import struct
 import os
 import re
 import sys
 
-BASE = 34  # char_count(25) + ('9'-'0')(9) = 34
+# Godot 4.x 全系 base=34（char_count=25 + ('9'-'0')=9）
+DEFAULT_BASE = 34
 
 HEAD_RE = re.compile(r'\[gd_(?:scene|resource)[^\]]*?uid="(uid://[a-z0-9]+)"')
 EXT_RE = re.compile(r'\[ext_resource[^\]]*?uid="(uid://[a-z0-9]+)"[^\]]*?path="(res://[^"]+)"')
 UIDFILE_RE = re.compile(r'uid://[a-z0-9]+')
 
 
-def text_to_id(t):
-    """与 Godot ResourceUID::text_to_id 一致：is_digit(0-9) 都接受，数字偏移 +char_count(25)。"""
+def text_to_id(t, base):
+    """与 Godot ResourceUID::text_to_id 一致：is_digit(0-9) 都接受，数字偏移 +char_count。"""
     if not t.startswith('uid://') or t == 'uid://<invalid>':
         return None
+    char_count = base - 9  # base = char_count + ('9'-'0') = char_count + 9
     uid = 0
     for ch in t[6:]:
-        uid *= BASE
+        uid *= base
         if 'a' <= ch <= 'z':
             uid += ord(ch) - ord('a')
         elif '0' <= ch <= '9':  # Godot 用 is_digit，接受 0-9（关键修复）
-            uid += ord(ch) - ord('0') + 25
+            uid += ord(ch) - ord('0') + char_count
         else:
             return None
     return uid & 0x7FFFFFFFFFFFFFFF
@@ -69,10 +78,10 @@ def scan_directory(root):
     return mapping
 
 
-def write_uid_cache(mapping, out_path):
+def write_uid_cache(mapping, out_path, base):
     entries = []
     for uid_text, path in mapping.items():
-        id_ = text_to_id(uid_text)
+        id_ = text_to_id(uid_text, base)
         if id_ is None:
             continue
         entries.append((id_, path))
@@ -94,10 +103,18 @@ def write_uid_cache(mapping, out_path):
 
 
 if __name__ == '__main__':
-    root = sys.argv[1] if len(sys.argv) > 1 else 'recovered'
+    args = sys.argv[1:]
+    root = args[0] if args else 'recovered'
+    base = DEFAULT_BASE
+    if '--base' in args:
+        idx = args.index('--base')
+        if idx + 1 < len(args):
+            base = int(args[idx + 1])
+    print(f"using base={base} (Godot 4.x UID encoding)")
+
     mapping = scan_directory(root)
-    print(f"scanned {root}: {len(mapping)} uid mappings")
+    print(f"scanned {root}: {len(mapping)} uid mappings (base={base})")
     out = os.path.join(root, '.godot', 'uid_cache.bin')
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    uniq = write_uid_cache(mapping, out)
+    uniq = write_uid_cache(mapping, out, base)
     print(f"wrote {len(uniq)} entries -> {out}")

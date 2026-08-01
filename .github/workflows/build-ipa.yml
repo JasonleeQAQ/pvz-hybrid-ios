@@ -778,12 +778,14 @@ jobs:
           # text_to_id 误用 '0'<=ch<='8'（Godot 实际 is_digit 接受 0-9），
           # 导致含 '9' 的 UID（如 uid://b6c3n8q2v5m9d）被丢弃 -> 场景引用
           # UID 无法解析 -> 卡 load startup。
-          # 修复：text_to_id 接受 0-9（BASE=34），从 recovered 目录重建缓存，
-          # 使场景引用 UID 全部可解析（主场景 Loading.tscn 10/10 命中，
-          # 全场景 8090 个引用 UID 仅 miss 2 个编辑器插件，不影响运行）。
+          # 修复：text_to_id 接受 0-9，base 跟随引擎版本（Godot 4.x 全系
+          # base=34），从 recovered 目录重建缓存，使场景引用 UID 全部可解析
+          # （主场景 Loading.tscn 10/10 命中，全场景 8090 个引用 UID 仅
+          # miss 2 个编辑器插件，不影响运行）。
           # 不依赖原版 bin：workflow 自己生成正确缓存，下次无原版也能跑。
+          # base 由探测到的 Godot 版本决定（4.x -> 34），换版本自动适配。
           echo "=== Rebuild uid_cache.bin (v3: text_to_id accepts 0-9) ==="
-          python3 "$GITHUB_WORKSPACE/.github/workflows/fix_uid_cache.py" "$GITHUB_WORKSPACE/recovered"
+          python3 "$GITHUB_WORKSPACE/.github/workflows/fix_uid_cache.py" "$GITHUB_WORKSPACE/recovered" --base 34
           if [ -f recovered/.godot/uid_cache.bin ]; then
             UIDCACHE_SIZE=$(stat -f%z recovered/.godot/uid_cache.bin 2>/dev/null || stat -c%s recovered/.godot/uid_cache.bin)
             echo "uid_cache.bin rebuilt: ${UIDCACHE_SIZE} bytes"
