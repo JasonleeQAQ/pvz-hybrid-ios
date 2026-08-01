@@ -182,6 +182,34 @@ jobs:
             echo "WARNING: no data_* dir found — prebuilt dll flow unavailable"
           fi
 
+          # ===== 从原版 pck 直接提取 uid_cache.bin（v4 合并基础，最可靠） =====
+          # 不依赖 GDRE 是否保留/重写缓存：直接从原版 pck 二进制提取
+          # .godot/uid_cache.bin（12743 条，含音频等二进制资源 UID）。
+          # fix_uid_cache.py 会以它为合并基础，补充 GDRE 重写新增的 .cs UID。
+          # 若提取失败或过小，说明原版缓存不可用，音频 UID 会缺失 ->
+          # 按钮不跳转，必须中止。
+          python3 "$GITHUB_WORKSPACE/.github/workflows/extract_uid_cache_from_pck.py" "$PCK" "$GITHUB_WORKSPACE/recovered/.godot/uid_cache.bin" 2>&1 | tail -5
+          if [ -f recovered/.godot/uid_cache.bin ]; then
+            ORIG_UIDCACHE_SIZE=$(stat -f%z recovered/.godot/uid_cache.bin 2>/dev/null || stat -c%s recovered/.godot/uid_cache.bin)
+            echo "original uid_cache.bin extracted from pck: ${ORIG_UIDCACHE_SIZE} bytes"
+            python3 - "$GITHUB_WORKSPACE/recovered/.godot/uid_cache.bin" <<'PYEOF'
+          import struct, sys
+          data = open(sys.argv[1], 'rb').read()
+          if len(data) < 4:
+              print('ERROR: uid_cache.bin too small')
+              sys.exit(1)
+          count = struct.unpack('<I', data[:4])[0]
+          print(f'original uid_cache entries: {count}')
+          if count < 9000:
+              print('ERROR: original uid_cache suspiciously small (<9000), audio UIDs will be missing')
+              sys.exit(1)
+          PYEOF
+          else
+            echo "ERROR: failed to extract uid_cache.bin from original pck"
+            echo "Audio UID mappings would be lost -> buttons won't navigate. Aborting."
+            exit 1
+          fi
+
       # ========== 强制保存阶段1缓存 ==========
       - name: 强制保存阶段1缓存
         id: save-stage1
@@ -785,18 +813,19 @@ jobs:
             echo "WARNING: no imported backup found, check 25-step backup"
           fi
 
-          # ===== 重建 uid_cache.bin（决定性修复，v3） =====
-          # 根因：GDRE 提取后 recovered/.godot/uid_cache.bin 是原版旧缓存
-          # （旧版 Godot BASE=32 编码），而场景文件里的 uid 字符串也是 BASE=32。
-          # 但 Godot 4.7 运行时用 BASE=34 解析，且旧 fix_uid_cache.py 的
-          # text_to_id 误用 '0'<=ch<='8'（Godot 实际 is_digit 接受 0-9），
-          # 导致含 '9' 的 UID（如 uid://b6c3n8q2v5m9d）被丢弃 -> 场景引用
-          # UID 无法解析 -> 卡 load startup。
-          # 修复：text_to_id 接受 0-9，base 跟随引擎版本（Godot 4.x 全系
-          # base=34），从 recovered 目录重建缓存，使场景引用 UID 全部可解析
-          # （主场景 Loading.tscn 10/10 命中，全场景 8090 个引用 UID 仅
-          # miss 2 个编辑器插件，不影响运行）。
-          # 不依赖原版 bin：workflow 自己生成正确缓存，下次无原版也能跑。
+          # ===== 重建 uid_cache.bin（决定性修复，v4：原版缓存 + GDRE 新增合并） =====
+          # 根因（v4，2026-08-01）：v3 只从 recovered 目录扫描 .uid/.tscn/.tres/.cs
+          # 文件头声明的 UID 重建缓存，导致音频等二进制资源（.ogg/.wav/.mp3/.png/
+          # .svg 等）的 UID 映射全部丢失——这些资源没有 .uid 文件、也没有资源头
+          # 声明 UID，其 UID 只存在于原版 uid_cache.bin。运行时通过 UID 加载音频
+          # 失败（104 个 Unrecognized UID），表现为：按钮有点击动画但不跳转
+          # （场景切换时音频资源加载失败中断逻辑）、画面下方蓝白背景。
+          # 实测：原版 uid_cache.bin 的 id 就是 BASE=34 编码（与 Godot 4.7 运行时
+          # 一致），并非旧版 BASE=32。因此直接以原版缓存为基础合并即可。
+          # 修复（v4）：fix_uid_cache.py 读取 GDRE 提取后保留的原版缓存
+          # （recovered/.godot/uid_cache.bin，12743 条），扫描补充 GDRE 重写新增的
+          # UID（主要是 .cs 脚本），合并输出（两者无路径冲突，安全）。
+          # 若原版缓存不存在（无原版可用），退化为纯扫描重建（v3 行为）。
           # base 由探测到的 Godot 版本决定（4.x -> 34），换版本自动适配。
           # 不硬编码：从 steps.detect 的 godot_version 推导 base。
           # Godot UID base 由引擎写死（resource_uid.cpp），4.x 全系 = 34。
@@ -808,7 +837,14 @@ jobs:
             4) UID_BASE=34 ;;
             *) UID_BASE=34 ;;  # 未知版本默认 34（Godot 4.x 兼容）
           esac
-          echo "=== Rebuild uid_cache.bin (v3: text_to_id accepts 0-9, base=$UID_BASE) ==="
+          echo "=== Rebuild uid_cache.bin (v4: merge original + GDRE new, base=$UID_BASE) ==="
+          # 备份 GDRE 提取的原版缓存（fix_uid_cache.py 会读取它做合并基础）
+          if [ -f recovered/.godot/uid_cache.bin ]; then
+            ORIG_UIDCACHE_SIZE=$(stat -f%z recovered/.godot/uid_cache.bin 2>/dev/null || stat -c%s recovered/.godot/uid_cache.bin)
+            echo "original uid_cache.bin before rebuild: ${ORIG_UIDCACHE_SIZE} bytes"
+          else
+            echo "WARNING: no original uid_cache.bin found (will rebuild from scan only)"
+          fi
           python3 "$GITHUB_WORKSPACE/.github/workflows/fix_uid_cache.py" "$GITHUB_WORKSPACE/recovered" --base "$UID_BASE"
           if [ -f recovered/.godot/uid_cache.bin ]; then
             UIDCACHE_SIZE=$(stat -f%z recovered/.godot/uid_cache.bin 2>/dev/null || stat -c%s recovered/.godot/uid_cache.bin)
@@ -826,6 +862,8 @@ jobs:
               print(f'  [{i}] id={id_} len={ln} path={path[:60]}')
               off += 12 + ln
           print(f'uid_cache entries: {count}')
+          # v4：合并后应 >= 原版 12743 条（含音频等资源 UID）。若 < 9000 说明
+          # 原版缓存丢失且扫描不全，音频 UID 会缺失 -> 按钮不跳转，必须中止。
           if count < 9000:
               print('ERROR: uid_cache suspiciously small, abort')
               sys.exit(1)
